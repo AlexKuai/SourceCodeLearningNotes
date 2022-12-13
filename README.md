@@ -8,3 +8,4 @@ ASP.NET Core 源码学习笔记
 - [配置](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/配置.md)  
 - [选项](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/选项.md)  
 - [日志](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/日志.md)  
+- [服务承载](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/服务承载.md)  
