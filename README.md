@@ -4,5 +4,7 @@ ASP.NET Core 源码学习笔记
 仅供学习参考和了解总体设计。  
 
 ## Docs
-* [依赖注入](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/依赖注入.md)  
-* [配置](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/配置.md)
+- [依赖注入](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/依赖注入.md)  
+- [配置](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/配置.md)  
+- [选项](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/选项.md)  
+- [日志](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/日志.md)  
