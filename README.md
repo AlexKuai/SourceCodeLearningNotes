@@ -12,3 +12,4 @@ ASP.NET Core 源码学习笔记
 - [日志](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/日志.md)  
 - [服务承载](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/服务承载.md)  
 - [管道中间件](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/管道中间件.md)  
+- [MinimalAPI](https://github.com/AlexKuai/SourceCodeLearningNotes/blob/main/MinimalAPI.md)  
