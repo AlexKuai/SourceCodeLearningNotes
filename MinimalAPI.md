@@ -12,7 +12,7 @@
 - ConfigureHostBuilder  
 - ConfigureWebHostBuilder  
 
-## 承载模型
+## Minimal API 编程模型
 
 - WebApplication
 
