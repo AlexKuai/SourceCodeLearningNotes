@@ -6,8 +6,8 @@
 - WebApplicationOptions  
 - HostApplicationBuilderSettings  
 - IHostApplicationBuilder  
-- WebApplicationBuilder  
 - HostApplicationBuilder  
+- WebApplicationBuilder  
 - BootstrapHostBuilder  
 - ConfigureHostBuilder  
 - ConfigureWebHostBuilder  
@@ -25,7 +25,6 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
 {
     internal const string GlobalEndpointRouteBuilderKey = "__GlobalEndpointRouteBuilder";
 
-    // 实际的 IHost
     private readonly IHost _host;
     private readonly List<EndpointDataSource> _dataSources = new();
 
@@ -46,6 +45,7 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
     public IServiceProvider Services => _host.Services;
 
     // 返回应用配置
+    // 本质是 HostApplicationBuilder.Configuration 保存的 ConfigurationManager
     public IConfiguration Configuration => _host.Services.GetRequiredService<IConfiguration>();
 
     // 返回 IWebHostEnvironment
@@ -54,11 +54,18 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
     // 返回 IHostApplicationLifetime
     public IHostApplicationLifetime Lifetime => _host.Services.GetRequiredService<IHostApplicationLifetime>();
 
-    // 返回 {IWebHostEnvironment.ApplicationName} 或 "WebApplication" 日志类别的 ILogger
+    // 返回日志类别为 {IWebHostEnvironment.ApplicationName} 或 "WebApplication" 的 ILogger
     public ILogger Logger { get; }
 
-    // 返回服务器提供的特性集合中 IServerAddressesFeature.Addresses 表示的地址集合
-    public ICollection<string> Urls => ServerFeatures.GetRequiredFeature<IServerAddressesFeature>().Addresses;
+    // 返回 ApplicationBuilder.Properties 表示的共享字典
+    internal IDictionary<string, object?> Properties => ApplicationBuilder.Properties;
+    // 显式实现 IApplicationBuilder
+    IDictionary<string, object?> IApplicationBuilder.Properties => Properties;
+
+    // 返回由服务器提供的特性集合
+    internal IFeatureCollection ServerFeatures => _host.Services.GetRequiredService<IServer>().Features;
+    // 显式实现 IApplicationBuilder
+    IFeatureCollection IApplicationBuilder.ServerFeatures => ServerFeatures;
 
     // 显式实现 IApplicationBuilder
     // 返回 ApplicationBuilder.ApplicationServices 表示的根容器
@@ -68,17 +75,9 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
         set => ApplicationBuilder.ApplicationServices = value;
     }
 
-    // 返回由服务器提供的特性集合
-    internal IFeatureCollection ServerFeatures => _host.Services.GetRequiredService<IServer>().Features;
-    // 显式实现 IApplicationBuilder
-    // 返回由服务器提供的特性集合
-    IFeatureCollection IApplicationBuilder.ServerFeatures => ServerFeatures;
-
-    // 返回 ApplicationBuilder.Properties 表示的共享字典
-    internal IDictionary<string, object?> Properties => ApplicationBuilder.Properties;
-    // 显式实现 IApplicationBuilder
-    // 返回 ApplicationBuilder.Properties 表示的共享字典
-    IDictionary<string, object?> IApplicationBuilder.Properties => Properties;
+    // 返回服务器提供的特性集合中 IServerAddressesFeature.Addresses 表示的地址集合
+    // 可以利用这个集合直接添加监听地址
+    public ICollection<string> Urls => ServerFeatures.GetRequiredFeature<IServerAddressesFeature>().Addresses;
 
     // 返回 ApplicationBuilder
     internal ApplicationBuilder ApplicationBuilder { get; }
@@ -135,17 +134,14 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
             throw new InvalidOperationException($"Changing the URL is not supported because {nameof(IServerAddressesFeature.Addresses)} {nameof(ICollection<string>.IsReadOnly)}.");
         }
 
-        // 只支持设置一个地址，不支持 ";" 分割的多个地址
+        // 只支持设置一个地址，并且不支持 ";" 分割的多个地址
         addresses.Clear();
         addresses.Add(url);
     }
 
-    // 调用 ApplicationBuilder.Build 方法构建请求处理委托链
-    // 并返回位于头部的请求处理器
+    // 调用 ApplicationBuilder.Build 方法构建请求处理委托链，并返回位于头部的请求处理器
     internal RequestDelegate BuildRequestDelegate() => ApplicationBuilder.Build();
     // 显式实现 IApplicationBuilder
-    // 调用 ApplicationBuilder.Build 方法构建请求处理委托链
-    // 并返回位于头部的请求处理器
     RequestDelegate IApplicationBuilder.Build() => BuildRequestDelegate();
  
     // 显式实现 IApplicationBuilder
@@ -153,14 +149,15 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
     IApplicationBuilder IApplicationBuilder.New()
     {
         var newBuilder = ApplicationBuilder.New();
-        // 新建的 IApplicationBuilder 会从创建它的 IApplicationBuilder 中复制共享字典
-        // 所以需要删除 "__GlobalEndpointRouteBuilder" 为 Key 的项
+        // 利用 ApplicationBuilder.New 创建的 IApplicationBuilder 会复制共享字典
+        // 而新建的 IApplicationBuilder 还是 ApplicationBuilder，不能代表全局 IEndpointRouteBuilder
+        // 所以需要从新建的 IApplicationBuilder 的共享字典中删除 Key 为 "__GlobalEndpointRouteBuilder" 的项
         newBuilder.Properties.Remove(GlobalEndpointRouteBuilderKey);
         return newBuilder;
     }
  
     // 实现 IApplicationBuilder
-    // 调用 ApplicationBuilder.Use 方法注册中间件
+    // 本质是由 ApplicationBuilder 完成中间件注册
     public IApplicationBuilder Use(Func<RequestDelegate, RequestDelegate> middleware)
     {
         ApplicationBuilder.Use(middleware);
@@ -170,7 +167,7 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
     IApplicationBuilder IEndpointRouteBuilder.CreateApplicationBuilder() => ((IApplicationBuilder)this).New();
 
     // 静态方法
-    // 创建 WebApplicationBuilder 并调用 Build 方法构建 WebApplication 实例
+    // 创建 WebApplicationBuilder 并调用 WebApplicationBuilder.Build 方法构建 WebApplication
     public static WebApplication Create(string[]? args = null) =>
         new WebApplicationBuilder(new() { Args = args }).Build();
     
@@ -256,8 +253,219 @@ public interface IHostApplicationBuilder
     // 返回 IServiceCollection
     IServiceCollection Services { get; }
     
-    // 配置容器建造者
+    // 使用第三方 IServiceProvider 工厂和对应的容器建造者配置
     void ConfigureContainer<TContainerBuilder>(IServiceProviderFactory<TContainerBuilder> factory, Action<TContainerBuilder>? configure = null) where TContainerBuilder : notnull;
+}
+```
+
+- HostApplicationBuilder  
+
+```C#
+// IHostApplicationBuilder 的默认实现
+// 主要作用：
+// 1. 收集并构建默认的宿主和应用配置
+// 2. 收集并构建默认的服务注册
+// 3. 使用第三方 IServiceProvider 工厂和对应的容器建造者配置创建 IServiceProvider
+// 4. 构建实际的 IHost
+// 5. 对外提供核心属性用来收集各种配置
+public sealed class HostApplicationBuilder : IHostApplicationBuilder
+{
+    private readonly HostBuilderContext _hostBuilderContext;
+    // 创建 ServiceCollection 用于服务注册
+    private readonly ServiceCollection _serviceCollection = new();
+    private readonly IHostEnvironment _environment;
+    private readonly LoggingBuilder _logging;
+    private readonly MetricsBuilder _metrics;
+ 
+    // 创建 IServiceProvider 的工厂方法
+    private Func<IServiceProvider> _createServiceProvider;
+    // 配置容器建造者的工厂方法
+    private Action<object> _configureContainer = _ => { };
+    private HostBuilderAdapter? _hostBuilderAdapter;
+ 
+    // 表示根容器的 IServiceProvider
+    private IServiceProvider? _appServices;
+    private bool _hostBuilt;
+ 
+    public HostApplicationBuilder()
+        : this(args: null)
+    {
+    }
+ 
+    public HostApplicationBuilder(string[]? args)
+        : this(new HostApplicationBuilderSettings { Args = args })
+    {
+    }
+ 
+    public HostApplicationBuilder(HostApplicationBuilderSettings? settings)
+    {
+        settings ??= new HostApplicationBuilderSettings();
+        Configuration = settings.Configuration ?? new ConfigurationManager();
+ 
+        if (!settings.DisableDefaults)
+        {
+            if (settings.ContentRootPath is null && Configuration[HostDefaults.ContentRootKey] is null)
+            {
+                // 添加内存配置源
+                // 添加 "contentRoot" 配置节表示的工作目录路径
+                // 默认使用当前目录（一般为应用程序根目录）
+                HostingHostBuilderExtensions.SetDefaultContentRoot(Configuration);
+            }
+
+            // 添加 "DOTNET_" 前缀的环境变量配置源 
+            Configuration.AddEnvironmentVariables(prefix: "DOTNET_");
+        }
+
+        // 执行初始化
+        Initialize(settings, out _hostBuilderContext, out _environment, out _logging, out _metrics);
+ 
+        ServiceProviderOptions? serviceProviderOptions = null;
+        if (!settings.DisableDefaults)
+        {
+            // 应用默认配置源
+            HostingHostBuilderExtensions.ApplyDefaultAppConfiguration(_hostBuilderContext, Configuration, settings.Args);
+            // 注册默认服务
+            HostingHostBuilderExtensions.AddDefaultServices(_hostBuilderContext, Services);
+            // 根据环境创建 ServiceProviderOptions 选项
+            serviceProviderOptions = HostingHostBuilderExtensions.CreateDefaultServiceProviderOptions(_hostBuilderContext);
+        }
+ 
+        // 用来创建默认的 IServiceProvider
+        _createServiceProvider = () =>
+        {
+            // 默认情况下 _configureContainer 保存的 Action<object> 委托是一个空方法
+            _configureContainer(Services);
+            return serviceProviderOptions is null ? Services.BuildServiceProvider() : Services.BuildServiceProvide(serviceProviderOptions);
+        };
+    }
+    
+    // 初始化
+    private void Initialize(HostApplicationBuilderSettings settings, out HostBuilderContext hostBuilderContext, out IHostEnvironment environment, out LoggingBuilder logging, out MetricsBuilder metrics)
+    {
+        // 添加命令行配置源
+        HostingHostBuilderExtensions.AddCommandLineConfig(Configuration, settings.Args);
+ 
+        // 添加内存配置源
+        // 利用 HostApplicationBuilderSettings 中的属性添加配置
+        // 添加 "applicationName" 配置节表示的应用程序名称
+        // 添加 "environment" 配置节表示的环境名称
+        // 添加 "contentRoot" 配置节表示的工作目录路径
+        List<KeyValuePair<string, string?>>? optionList = null;
+        if (settings.ApplicationName is not null)
+        {
+            optionList ??= new List<KeyValuePair<string, string?>>();
+            optionList.Add(new KeyValuePair<string, string?>(HostDefaults.ApplicationKey, settings.ApplicationName));
+        }
+        if (settings.EnvironmentName is not null)
+        {
+            optionList ??= new List<KeyValuePair<string, string?>>();
+            optionList.Add(new KeyValuePair<string, string?>(HostDefaults.EnvironmentKey, settings.EnvironmentName));
+        }
+        if (settings.ContentRootPath is not null)
+        {
+            optionList ??= new List<KeyValuePair<string, string?>>();
+            optionList.Add(new KeyValuePair<string, string?>(HostDefaults.ContentRootKey, settings.ContentRootPath));
+        }
+        if (optionList is not null)
+        {
+            Configuration.AddInMemoryCollection(optionList);
+        }
+
+        // 利用配置创建 HostingEnvironment 和 PhysicalFileProvider
+        (HostingEnvironment hostingEnvironment, PhysicalFileProvider physicalFileProvider) = HostBuilder.CreateHostingEnvironment(Configuration);
+
+        // 为后续使用 ConfigurationManager 添加基于文件的配置源时提供默认的 IFileProvider
+        Configuration.SetFileProvider(physicalFileProvider);
+
+        // 创建 HostBuilderContext
+        hostBuilderContext = new HostBuilderContext(new Dictionary<object, object>())
+        {
+            HostingEnvironment = hostingEnvironment,
+            Configuration = Configuration,
+        };
+ 
+        environment = hostingEnvironment;
+
+        // 注册默认服务
+        HostBuilder.PopulateServiceCollection(
+            Services,
+            hostBuilderContext,
+            hostingEnvironment,
+            physicalFileProvider,
+            Configuration,
+            () => _appServices!);
+ 
+        logging = new LoggingBuilder(Services);
+        metrics = new MetricsBuilder(Services);
+    }
+ 
+    IDictionary<object, object> IHostApplicationBuilder.Properties => _hostBuilderContext.Properties;
+ 
+    public IHostEnvironment Environment => _environment;
+ 
+    public ConfigurationManager Configuration { get; }
+ 
+    IConfigurationManager IHostApplicationBuilder.Configuration => Configuration;
+ 
+    public IServiceCollection Services => _serviceCollection;
+ 
+    public ILoggingBuilder Logging => _logging;
+ 
+    public IMetricsBuilder Metrics => _metrics;
+    
+    // 使用第三方 IServiceProvider 工厂和对应的容器建造者配置
+    public void ConfigureContainer<TContainerBuilder>(IServiceProviderFactory<TContainerBuilder> factory, Action<TContainerBuilder>? configure = null) where TContainerBuilder : notnull
+    {
+        // 定义 Func<IServiceProvider> 委托的原型方法
+        _createServiceProvider = () =>
+        {
+            // 利用第三方 IServiceProvider 工厂创建容器建造者
+            TContainerBuilder containerBuilder = factory.CreateBuilder(Services);
+            // 配置容器建造者
+            _configureContainer(containerBuilder);
+            // 得到 IServiceProvider 并返回
+            return factory.CreateServiceProvider(containerBuilder);
+        };
+
+        // 模拟适配器模式
+        _configureContainer = containerBuilder => configure?.Invoke((TContainerBuilder)containerBuilder);
+    }
+ 
+    // 构建得到实际的 IHost
+    public IHost Build()
+    {
+        if (_hostBuilt)
+        {
+            throw new InvalidOperationException(SR.BuildCalled);
+        }
+        _hostBuilt = true;
+ 
+        using DiagnosticListener diagnosticListener = HostBuilder.LogHostBuilding(this);
+        _hostBuilderAdapter?.ApplyChanges();
+
+        // 应用 IServiceProvider 工厂和配置创建表示根容器的 IServiceProvider
+        _appServices = _createServiceProvider();
+ 
+        _serviceCollection.MakeReadOnly();
+
+        // 利用根容器创建实际的 IHost
+        return HostBuilder.ResolveHost(_appServices, diagnosticListener);
+    }
+ 
+    private sealed class LoggingBuilder : ILoggingBuilder
+    {
+        public LoggingBuilder(IServiceCollection services)
+        {
+            Services = services;
+        }
+ 
+        public IServiceCollection Services { get; }
+    }
+ 
+    private sealed class MetricsBuilder(IServiceCollection services) : IMetricsBuilder
+    {
+        public IServiceCollection Services { get; } = services;
+    }
 }
 ```
 
@@ -286,7 +494,7 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         // ConfigurationManager 同时实现了 IConfigurationBuilder 和 IConfiguration
         // 所以既可以用来收集配置源，也可以用来提供配置
         // 注意：
-        // 使用 ConfigurationManager 收集配置源时有一个特殊之处就是会立即构建对应的 IConfigurationProvider 用于提供配置
+        // 使用 ConfigurationManager 收集配置源时会立即构建对应的 IConfigurationProvider 用于提供配置
         // 而不需要像传统的配置模型那样先调用 IConfigurationBuilder.Build 方法构建 IConfigurationRoot 后才能使用配置
         var configuration = new ConfigurationManager();
         
@@ -304,7 +512,7 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         });
  
         // 添加内存配置源
-        // 并添加 "webroot" 配置节表示的 Web 目录路径
+        // 添加 "webroot" 配置节表示的 Web 目录路径
         if (options.WebRootPath is not null)
         {
             Configuration.AddInMemoryCollection(new[]
@@ -346,8 +554,8 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         _genericWebHostServiceDescriptor = InitializeHosting(bootstrapHostBuilder);
     }
 
-    // 初始化 IWebHostBuilder 的备用配置
-    // 通过 UseSetting 方法添加配置
+    // 通过 UseSetting 方法添加配置，初始化 IWebHostBuilder 的备用配置
+    // 目的是为强类型 Startup 类型提供配置
     private void InitializeWebHostSettings(IWebHostBuilder webHostBuilder)
     {
         webHostBuilder.UseSetting(WebHostDefaults.ApplicationKey, _hostApplicationBuilder.Environment.ApplicationName ?? "");
@@ -401,7 +609,7 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
     {
         // 重新添加表示 GenericWebHostService 服务注册的 ServiceDescriptor
         _hostApplicationBuilder.Services.Add(_genericWebHostServiceDescriptor);
-        // 可以通过 IHostBuilder 编程模型提供第三方的 IServiceProvider 工厂和容器建造者配置
+        // 可以通过 IHostBuilder 编程模型提供第三方的 IServiceProvider 工厂和对应的容器建造者配置
         Host.ApplyServiceProviderFactory(_hostApplicationBuilder);
         // 构建实际的 IHost 并用来创建 WebApplication
         _builtApplication = new WebApplication(_hostApplicationBuilder.Build());
@@ -511,216 +719,6 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
             // 所以通过注册一个短路中间件的方式，即可以连接后续请求处理器，又可以丢弃这个末端请求处理器
             return _builtApplication.Build();
         }
-    }
-}
-```
-
-- HostApplicationBuilder  
-
-```C#
-// IHostApplicationBuilder 的默认实现
-// 主要作用：
-// 1. 收集并构建默认的宿主和应用配置
-// 2. 收集并构建默认的服务注册
-// 3. 使用第三方的 IServiceProvider 工厂和对应的容器建造者配置创建 IServiceProvider
-// 4. 构建实际的 IHost
-// 5. 对外提供核心属性用来收集构建配置
-public sealed class HostApplicationBuilder : IHostApplicationBuilder
-{
-    private readonly HostBuilderContext _hostBuilderContext;
-    // 默认创建 ServiceCollection 用于服务注册
-    private readonly ServiceCollection _serviceCollection = new();
-    private readonly IHostEnvironment _environment;
-    private readonly LoggingBuilder _logging;
-    private readonly MetricsBuilder _metrics;
- 
-    private Func<IServiceProvider> _createServiceProvider;
-    private Action<object> _configureContainer = _ => { };
-    private HostBuilderAdapter? _hostBuilderAdapter;
- 
-    // 表示根容器的 IServiceProvider
-    private IServiceProvider? _appServices;
-    private bool _hostBuilt;
- 
-    public HostApplicationBuilder()
-        : this(args: null)
-    {
-    }
- 
-    public HostApplicationBuilder(string[]? args)
-        : this(new HostApplicationBuilderSettings { Args = args })
-    {
-    }
- 
-    public HostApplicationBuilder(HostApplicationBuilderSettings? settings)
-    {
-        settings ??= new HostApplicationBuilderSettings();
-        Configuration = settings.Configuration ?? new ConfigurationManager();
- 
-        if (!settings.DisableDefaults)
-        {
-            if (settings.ContentRootPath is null && Configuration[HostDefaults.ContentRootKey] is null)
-            {
-                // 添加内存配置源
-                // 并添加 "contentRoot" 配置节表示的工作目录路径
-                // 默认使用当前目录（一般为应用程序根目录）
-                HostingHostBuilderExtensions.SetDefaultContentRoot(Configuration);
-            }
-
-            // 添加 "DOTNET_" 前缀的环境变量配置源 
-            Configuration.AddEnvironmentVariables(prefix: "DOTNET_");
-        }
-
-        // 执行初始化
-        Initialize(settings, out _hostBuilderContext, out _environment, out _logging, out _metrics);
- 
-        ServiceProviderOptions? serviceProviderOptions = null;
-        if (!settings.DisableDefaults)
-        {
-            // 应用默认配置源
-            HostingHostBuilderExtensions.ApplyDefaultAppConfiguration(_hostBuilderContext, Configuration, settings.Args);
-            // 注册默认服务
-            HostingHostBuilderExtensions.AddDefaultServices(_hostBuilderContext, Services);
-            // 根据环境创建 ServiceProviderOptions 选项
-            serviceProviderOptions = HostingHostBuilderExtensions.CreateDefaultServiceProviderOptions(_hostBuilderContext);
-        }
- 
-        // 定义 Func<IServiceProvider> 委托的原型方法
-        // 用来创建默认的 IServiceProvider
-        _createServiceProvider = () =>
-        {
-            // 默认情况下 _configureContainer 保存的 Action<object> 委托是一个空方法
-            _configureContainer(Services);
-            return serviceProviderOptions is null ? Services.BuildServiceProvider() : Services.BuildServiceProvide(serviceProviderOptions);
-        };
-    }
-    
-    // 初始化
-    private void Initialize(HostApplicationBuilderSettings settings, out HostBuilderContext hostBuilderContext, out IHostEnvironment environment, out LoggingBuilder logging, out MetricsBuilder metrics)
-    {
-        // 添加命令行配置源
-        HostingHostBuilderExtensions.AddCommandLineConfig(Configuration, settings.Args);
- 
-        // 添加内存配置源
-        // 利用 HostApplicationBuilderSettings 中的属性初添加配置
-        // 添加 "applicationName" 配置节表示的应用程序名称
-        // 添加 "environment" 配置节表示的环境名称
-        // 添加 "contentRoot" 配置节表示的工作目录路径
-        List<KeyValuePair<string, string?>>? optionList = null;
-        if (settings.ApplicationName is not null)
-        {
-            optionList ??= new List<KeyValuePair<string, string?>>();
-            optionList.Add(new KeyValuePair<string, string?>(HostDefaults.ApplicationKey, settings.ApplicationName));
-        }
-        if (settings.EnvironmentName is not null)
-        {
-            optionList ??= new List<KeyValuePair<string, string?>>();
-            optionList.Add(new KeyValuePair<string, string?>(HostDefaults.EnvironmentKey, settings.EnvironmentName));
-        }
-        if (settings.ContentRootPath is not null)
-        {
-            optionList ??= new List<KeyValuePair<string, string?>>();
-            optionList.Add(new KeyValuePair<string, string?>(HostDefaults.ContentRootKey, settings.ContentRootPath));
-        }
-        if (optionList is not null)
-        {
-            Configuration.AddInMemoryCollection(optionList);
-        }
-
-        // 利用配置创建 HostingEnvironment 和 PhysicalFileProvider
-        (HostingEnvironment hostingEnvironment, PhysicalFileProvider physicalFileProvider) = HostBuilder.CreateHostingEnvironment(Configuration);
-
-        // 为后续使用 ConfigurationManager 添加基于文件的配置源时提供默认的 IFileProvider
-        Configuration.SetFileProvider(physicalFileProvider);
-
-        // 创建 HostBuilderContext
-        hostBuilderContext = new HostBuilderContext(new Dictionary<object, object>())
-        {
-            HostingEnvironment = hostingEnvironment,
-            Configuration = Configuration,
-        };
- 
-        environment = hostingEnvironment;
-
-        // 注册默认服务
-        HostBuilder.PopulateServiceCollection(
-            Services,
-            hostBuilderContext,
-            hostingEnvironment,
-            physicalFileProvider,
-            Configuration,
-            () => _appServices!);
- 
-        logging = new LoggingBuilder(Services);
-        metrics = new MetricsBuilder(Services);
-    }
- 
-    IDictionary<object, object> IHostApplicationBuilder.Properties => _hostBuilderContext.Properties;
- 
-    public IHostEnvironment Environment => _environment;
- 
-    public ConfigurationManager Configuration { get; }
- 
-    IConfigurationManager IHostApplicationBuilder.Configuration => Configuration;
- 
-    public IServiceCollection Services => _serviceCollection;
- 
-    public ILoggingBuilder Logging => _logging;
- 
-    public IMetricsBuilder Metrics => _metrics;
-    
-    // 配置并使用第三方容器
-    public void ConfigureContainer<TContainerBuilder>(IServiceProviderFactory<TContainerBuilder> factory, Action<TContainerBuilder>? configure = null) where TContainerBuilder : notnull
-    {
-        // 定义 Func<IServiceProvider> 委托的原型方法
-        _createServiceProvider = () =>
-        {
-            // 利用第三方 IServiceProvider 工厂创建容器建造者
-            TContainerBuilder containerBuilder = factory.CreateBuilder(Services);
-            // 配置容器建造者
-            _configureContainer(containerBuilder);
-            // 得到 IServiceProvider 并返回
-            return factory.CreateServiceProvider(containerBuilder);
-        };
-
-        // 模拟适配器模式
-        _configureContainer = containerBuilder => configure?.Invoke((TContainerBuilder)containerBuilder);
-    }
- 
-    // 构建得到实际的 IHost
-    public IHost Build()
-    {
-        if (_hostBuilt)
-        {
-            throw new InvalidOperationException(SR.BuildCalled);
-        }
-        _hostBuilt = true;
- 
-        using DiagnosticListener diagnosticListener = HostBuilder.LogHostBuilding(this);
-        _hostBuilderAdapter?.ApplyChanges();
-
-        // 应用 IServiceProvider 工厂和配置创建表示根容器的 IServiceProvider
-        _appServices = _createServiceProvider();
- 
-        _serviceCollection.MakeReadOnly();
-
-        // 利用根容器创建实际的 IHost
-        return HostBuilder.ResolveHost(_appServices, diagnosticListener);
-    }
- 
-    private sealed class LoggingBuilder : ILoggingBuilder
-    {
-        public LoggingBuilder(IServiceCollection services)
-        {
-            Services = services;
-        }
- 
-        public IServiceCollection Services { get; }
-    }
- 
-    private sealed class MetricsBuilder(IServiceCollection services) : IMetricsBuilder
-    {
-        public IServiceCollection Services { get; } = services;
     }
 }
 ```
@@ -892,7 +890,7 @@ public sealed class ConfigureHostBuilder : IHostBuilder, ISupportsConfigureWebHo
     }
  
     // 添加针对应用的配置
-    // 本质是利用 HostApplicationBuilder.Configuration 添加并立即构建应用配置
+    // 本质是利用 HostApplicationBuilder.Configuration 添加配置并立即构建应用配置
     public IHostBuilder ConfigureAppConfiguration(Action<HostBuilderContext, IConfigurationBuilder> configureDelegate)
     {
         configureDelegate(_context, _configuration);
@@ -911,7 +909,7 @@ public sealed class ConfigureHostBuilder : IHostBuilder, ISupportsConfigureWebHo
     }
  
     // 添加针对宿主的配置
-    // 本质是利用 HostApplicationBuilder.Configuration 添加并立即构建宿主配置
+    // 本质是利用 HostApplicationBuilder.Configuration 添加配置并立即构建宿主配置
     public IHostBuilder ConfigureHostConfiguration(Action<IConfigurationBuilder> configureDelegate)
     {
         var previousApplicationName = _configuration[HostDefaults.ApplicationKey];
@@ -942,7 +940,7 @@ public sealed class ConfigureHostBuilder : IHostBuilder, ISupportsConfigureWebHo
     }
  
     // 添加针对服务注册的配置
-    // 本质是利用 HostApplicationBuilder.Services 添加并立即构建服务注册
+    // 本质是利用 HostApplicationBuilder.Services 添加配置并立即构建服务注册
     public IHostBuilder ConfigureServices(Action<HostBuilderContext, IServiceCollection> configureDelegate)
     {
         configureDelegate(_context, _services);
@@ -961,11 +959,12 @@ public sealed class ConfigureHostBuilder : IHostBuilder, ISupportsConfigureWebHo
     // 使用第三方 IServiceProvider 工厂
     public IHostBuilder UseServiceProviderFactory<TContainerBuilder>(Func<HostBuilderContext, IServiceProviderFactory<TContainerBuilder>> factory) where TContainerBuilder : notnull
     {
+        // 利用 HostBuilderContext 通过工厂方法创建 IServiceProvider 工厂
         return UseServiceProviderFactory(factory(_context));
     }
     
-    // IHostBuilder 编程模型配置 IWebHostBuilder
-    // 防止通过调用 IHostBuilder.ConfigureWebHost 扩展方法配置 IWebHostBuilder
+    // IHostBuilder 编程模型已不再支持通过扩展方法配置 IWebHostBuilder
+    // 防止开发人员以为可以通过调用 IHostBuilder.ConfigureWebHost 扩展方法配置 IWebHostBuilder
     IHostBuilder ISupportsConfigureWebHost.ConfigureWebHost(Action<IWebHostBuilder> configure, Action<WebHostBuilderOptions> configureOptions)
     {
         throw new NotSupportedException("ConfigureWebHost() is not supported by WebApplicationBuilder.Host. Use the WebApplication returned by WebApplicationBuilder.Build() instead.");
@@ -1169,13 +1168,13 @@ public sealed class ConfigureWebHostBuilder : IWebHostBuilder, ISupportsStartup
     }
  
     // 通过 IWebHostBuilder 编程模型已不再支持实现 ISupportsStartup 接口的所有方法
-    IWebHostBuilder ISupportsStartup.UseStartup([DynamicallyAccessedMembers(StartupLinkerOptions.Accessibility)] Type startupType)
+    IWebHostBuilder ISupportsStartup.UseStartup(Type startupType)
     {
         throw new NotSupportedException("UseStartup() is not supported by WebApplicationBuilder.WebHost. Use the WebApplication returned by WebApplicationBuilder.Build() instead.");
     }
  
     // 通过 IWebHostBuilder 编程模型已不再支持实现 ISupportsStartup 接口的所有方法
-    IWebHostBuilder ISupportsStartup.UseStartup<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods)] TStartup>(Func<WebHostBuilderContext, TStartup> startupFactory)
+    IWebHostBuilder ISupportsStartup.UseStartup<TStartup>(Func<WebHostBuilderContext, TStartup> startupFactory)
     {
         throw new NotSupportedException("UseStartup() is not supported by WebApplicationBuilder.WebHost. Use the WebApplication returned by WebApplicationBuilder.Build() instead.");
     }
