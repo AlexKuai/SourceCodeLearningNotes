@@ -57,35 +57,12 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
     // 返回日志类别为 {IWebHostEnvironment.ApplicationName} 或 "WebApplication" 的 ILogger
     public ILogger Logger { get; }
 
-    // 返回 ApplicationBuilder.Properties 表示的共享字典
-    internal IDictionary<string, object?> Properties => ApplicationBuilder.Properties;
-    // 显式实现 IApplicationBuilder
-    IDictionary<string, object?> IApplicationBuilder.Properties => Properties;
-
-    // 返回由服务器提供的特性集合
-    internal IFeatureCollection ServerFeatures => _host.Services.GetRequiredService<IServer>().Features;
-    // 显式实现 IApplicationBuilder
-    IFeatureCollection IApplicationBuilder.ServerFeatures => ServerFeatures;
-
-    // 显式实现 IApplicationBuilder
-    // 返回 ApplicationBuilder.ApplicationServices 表示的根容器
-    IServiceProvider IApplicationBuilder.ApplicationServices
-    {
-        get => ApplicationBuilder.ApplicationServices;
-        set => ApplicationBuilder.ApplicationServices = value;
-    }
-
     // 返回服务器提供的特性集合中 IServerAddressesFeature.Addresses 表示的地址集合
     // 可以利用这个集合直接添加监听地址
     public ICollection<string> Urls => ServerFeatures.GetRequiredFeature<IServerAddressesFeature>().Addresses;
 
     // 返回 ApplicationBuilder
     internal ApplicationBuilder ApplicationBuilder { get; }
-
-    internal ICollection<EndpointDataSource> DataSources => _dataSources;
-    ICollection<EndpointDataSource> IEndpointRouteBuilder.DataSources => DataSources;
-
-    IServiceProvider IEndpointRouteBuilder.ServiceProvider => Services;
 
     // 实现 IHost
     // 启动宿主
@@ -139,6 +116,24 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
         addresses.Add(url);
     }
 
+    // 返回 ApplicationBuilder.Properties 表示的共享字典
+    internal IDictionary<string, object?> Properties => ApplicationBuilder.Properties;
+    // 显式实现 IApplicationBuilder
+    IDictionary<string, object?> IApplicationBuilder.Properties => Properties;
+
+    // 返回由服务器提供的特性集合
+    internal IFeatureCollection ServerFeatures => _host.Services.GetRequiredService<IServer>().Features;
+    // 显式实现 IApplicationBuilder
+    IFeatureCollection IApplicationBuilder.ServerFeatures => ServerFeatures;
+
+    // 显式实现 IApplicationBuilder
+    // 返回 ApplicationBuilder.ApplicationServices 表示的根容器
+    IServiceProvider IApplicationBuilder.ApplicationServices
+    {
+        get => ApplicationBuilder.ApplicationServices;
+        set => ApplicationBuilder.ApplicationServices = value;
+    }
+
     // 调用 ApplicationBuilder.Build 方法构建请求处理委托链，并返回位于头部的请求处理器
     internal RequestDelegate BuildRequestDelegate() => ApplicationBuilder.Build();
     // 显式实现 IApplicationBuilder
@@ -165,6 +160,11 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
     }
  
     IApplicationBuilder IEndpointRouteBuilder.CreateApplicationBuilder() => ((IApplicationBuilder)this).New();
+
+    internal ICollection<EndpointDataSource> DataSources => _dataSources;
+    ICollection<EndpointDataSource> IEndpointRouteBuilder.DataSources => DataSources;
+
+    IServiceProvider IEndpointRouteBuilder.ServiceProvider => Services;
 
     // 静态方法
     // 创建 WebApplicationBuilder 并调用 WebApplicationBuilder.Build 方法构建 WebApplication
@@ -544,7 +544,7 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
             options =>
             {
                 // 禁用环境变量配置源
-                // 因为 "ASPNETCORE_" 前缀的环境变量配置源已经添加到配置中，无需重复添加
+                // 因为 "ASPNETCORE_" 前缀的环境变量配置已经添加到配置中，无需重复添加
                 options.SuppressEnvironmentConfiguration = true;
             }
         );
@@ -554,8 +554,8 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         _genericWebHostServiceDescriptor = InitializeHosting(bootstrapHostBuilder);
     }
 
-    // 通过 UseSetting 方法添加配置，初始化 IWebHostBuilder 的备用配置
-    // 目的是为强类型 Startup 类型提供配置
+    // 由于在构建 GenericWebHostBuilder 时阻止添加 "ASPNETCORE_" 前缀的环境变量配置
+    // 所以通过 UseSetting 方法为备用配置添加强类型 Startup 所需的配置
     private void InitializeWebHostSettings(IWebHostBuilder webHostBuilder)
     {
         webHostBuilder.UseSetting(WebHostDefaults.ApplicationKey, _hostApplicationBuilder.Environment.ApplicationName ?? "");
@@ -971,7 +971,7 @@ public sealed class ConfigureHostBuilder : IHostBuilder, ISupportsConfigureWebHo
     }
  
     // 本质是利用 HostApplicationBuilder.ConfigureContainer 添加第三方 IServiceProvider 工厂和配置
-    // 用户后续在 HostApplicationBuilder.Build 方法中创建 IServiceProvider
+    // 并在后续的 HostApplicationBuilder.Build 方法中创建 IServiceProvider
     internal void ApplyServiceProviderFactory(HostApplicationBuilder hostApplicationBuilder)
     {
         if (_serviceProviderFactory is null)
