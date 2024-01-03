@@ -20,7 +20,7 @@
 // 表示 Web 应用程序
 // 实现 IHost 并对实际的 IHost 封装，实现的所有方法最终都会转移到实际的 IHost 上
 // 实现 IApplicationBuilder 并对实际的 IApplicationBuilder 封装，实现的所有方法最终都会转移到实际的 IApplicationBuilder 上
-// 实现 IEndpointRouteBuilder 用来注册路由
+// 实现 IEndpointRouteBuilder 用来注册 EndpointDataSource
 public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteBuilder, IAsyncDisposable
 {
     internal const string GlobalEndpointRouteBuilderKey = "__GlobalEndpointRouteBuilder";
@@ -158,12 +158,15 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
         ApplicationBuilder.Use(middleware);
         return this;
     }
- 
+    
+    // 显式实现 IEndpointRouteBuilder
     IApplicationBuilder IEndpointRouteBuilder.CreateApplicationBuilder() => ((IApplicationBuilder)this).New();
 
     internal ICollection<EndpointDataSource> DataSources => _dataSources;
+    // 显式实现 IEndpointRouteBuilder
     ICollection<EndpointDataSource> IEndpointRouteBuilder.DataSources => DataSources;
 
+    // 显式实现 IEndpointRouteBuilder
     IServiceProvider IEndpointRouteBuilder.ServiceProvider => Services;
 
     // 静态方法
@@ -617,14 +620,20 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
     }
 
     // 配置中间件建造者
+    // 参数 app 表示的 IApplicationBuilder 是由 GenericWebHostService 注入的 IApplicationBuilderFactory 创建的
     private void ConfigureApplication(WebHostBuilderContext context, IApplicationBuilder app) =>
         ConfigureApplication(context, app, allowDeveloperExceptionPage: true);
     
     // 配置中间件建造者
+    // 参数 app 表示的 IApplicationBuilder 是由 GenericWebHostService 注入的 IApplicationBuilderFactory 创建的
     private void ConfigureApplication(WebHostBuilderContext context, IApplicationBuilder app, bool allowDeveloperExceptionPage)
     {
         Debug.Assert(_builtApplication is not null);
  
+        // 在 Minimal API 编程模型中，WebApplication 扮演着全局 IEndpointRouteBuilder 的角色
+        // 并且 WebApplication 还扮演着 IApplicationBuilder 的角色，提供 IApplicationBuilder.Properties 表示的共享字典
+        // 创建 WebApplication 时会将自身以 "__GlobalEndpointRouteBuilder" 为 Key 添加到共享字典中作为全局 IEndpointRouteBuilder
+        // 所以需要从当前 IApplicationBuilder 的共享字典中删除 Key 为 "__EndpointRouteBuilder" 的项
         if (app.Properties.TryGetValue(EndpointRouteBuilderKey, out var priorRouteBuilder))
         {
             app.Properties.Remove(EndpointRouteBuilderKey);
@@ -640,11 +649,18 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         // destination.UseRouting()
         // destination.Run(source)
         // destination.UseEndpoints()
- 
+
+        // 将 WebApplication 以 "__GlobalEndpointRouteBuilder" 为 Key 添加到当前 IApplicationBuilder 的共享字典中作为全局 IEndpointRouteBuilder
         app.Properties.Add(WebApplication.GlobalEndpointRouteBuilderKey, _builtApplication);
- 
+
+        // 如果利用 WebApplication 作为 IEndpointRouteBuilder 注册了 EndpointDataSource
         if (_builtApplication.DataSources.Count > 0)
         {
+            // 如果利用 WebApplication 作为 IApplicationBuilder 没有调用 IApplicationBuilder.UseRouting 扩展方法
+            // 则需要利用当前 IApplicationBuilder 调用 IApplicationBuilder.UseRouting 扩展方法
+            // 完成两个功能：
+            // 1. 确保注册 EndpointRoutingMiddleware 中间件
+            // 2. 利用 WebApplication 作为 IEndpointRouteBuilder 传递给 EndpointRoutingMiddleware 中间件
             if (!_builtApplication.Properties.TryGetValue(EndpointRouteBuilderKey, out var localRouteBuilder))
             {
                 app.UseRouting();
