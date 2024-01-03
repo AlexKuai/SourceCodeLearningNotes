@@ -702,9 +702,11 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         // 注册导线中间件
         var wireSourcePipeline = new WireSourcePipeline(_builtApplication);
         app.Use(wireSourcePipeline.CreateMiddleware);
- 
+
+        // 如果利用 WebApplication 作为 IEndpointRouteBuilder 注册了 EndpointDataSource
         if (_builtApplication.DataSources.Count > 0)
         {
+            // 确保注册 EndpointMiddleware 中间件
             app.UseEndpoints(_ => { });
         }
  
