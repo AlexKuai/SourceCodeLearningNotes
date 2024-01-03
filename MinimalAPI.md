@@ -620,12 +620,12 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
     }
 
     // 配置中间件建造者
-    // 参数 app 表示的 IApplicationBuilder 是由 GenericWebHostService 注入的 IApplicationBuilderFactory 创建的
+    // 参数 app 表示的 IApplicationBuilder 是通过 GenericWebHostService 构造函数注入的 IApplicationBuilderFactory 创建的
     private void ConfigureApplication(WebHostBuilderContext context, IApplicationBuilder app) =>
         ConfigureApplication(context, app, allowDeveloperExceptionPage: true);
     
     // 配置中间件建造者
-    // 参数 app 表示的 IApplicationBuilder 是由 GenericWebHostService 注入的 IApplicationBuilderFactory 创建的
+    // 参数 app 表示的 IApplicationBuilder 是通过 GenericWebHostService 构造函数注入的 IApplicationBuilderFactory 创建的
     private void ConfigureApplication(WebHostBuilderContext context, IApplicationBuilder app, bool allowDeveloperExceptionPage)
     {
         Debug.Assert(_builtApplication is not null);
@@ -656,11 +656,19 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         // 如果利用 WebApplication 作为 IEndpointRouteBuilder 注册了 EndpointDataSource
         if (_builtApplication.DataSources.Count > 0)
         {
+            // 在 Minimal API 编程模型中，由于 WebApplication 扮演着全局 IEndpointRouteBuilder 的角色
+            // 所以可以直接利用 WebApplication 注册 EndpointDataSource
+            // 在 IHost/IHostBuilder 编程模型中，需要先调用 IApplicationBuilder.UseRouting 扩展方法
+            // 创建 DefaultEndpointRouteBuilder 作为 IEndpointRouteBuilder
+            // 再调用 IApplicationBuilder.UseEndpoints 扩展方法
+            // 添加针对 IEndpointRouteBuilder 的配置
+            // 最后利用 DefaultEndpointRouteBuilder 注册 EndpointDataSource
+
             // 如果利用 WebApplication 作为 IApplicationBuilder 没有调用 IApplicationBuilder.UseRouting 扩展方法
             // 则需要利用当前 IApplicationBuilder 调用 IApplicationBuilder.UseRouting 扩展方法
-            // 完成两个功能：
+            // 主要完成两个功能：
             // 1. 确保注册 EndpointRoutingMiddleware 中间件
-            // 2. 利用 WebApplication 作为 IEndpointRouteBuilder 传递给 EndpointRoutingMiddleware 中间件
+            // 2. 利用 WebApplication 作为 IEndpointRouteBuilder 传递给 EndpointRoutingMiddleware 的构造函数
             if (!_builtApplication.Properties.TryGetValue(EndpointRouteBuilderKey, out var localRouteBuilder))
             {
                 app.UseRouting();
@@ -702,6 +710,7 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
  
         MergeMiddlewareDescriptions(app);
 
+        // 将 WebApplication 在扮演 IApplicationBuilder 时利用共享字典收集的数据转移到当前 IApplicationBuilder 的共享字典上
         foreach (var item in _builtApplication.Properties)
         {
             app.Properties[item.Key] = item.Value;
