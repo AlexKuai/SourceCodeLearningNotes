@@ -657,18 +657,15 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         if (_builtApplication.DataSources.Count > 0)
         {
             // 在 Minimal API 编程模型中，由于 WebApplication 扮演着全局 IEndpointRouteBuilder 的角色
-            // 所以可以直接利用 WebApplication 注册 EndpointDataSource
-            // 在 IHost/IHostBuilder 编程模型中，需要先调用 IApplicationBuilder.UseRouting 扩展方法
-            // 创建 DefaultEndpointRouteBuilder 作为 IEndpointRouteBuilder
-            // 再调用 IApplicationBuilder.UseEndpoints 扩展方法
-            // 添加针对 IEndpointRouteBuilder 的配置
-            // 最后利用 DefaultEndpointRouteBuilder 注册 EndpointDataSource
+            // 所以可以直接利用 WebApplication 作为 IEndpointRouteBuilder 注册 EndpointDataSource
+            // 而在 IHost/IHostBuilder 编程模型中，需要分 3 步完成 EndpointDataSource 的注册
+            // 1. 调用 IApplicationBuilder.UseRouting 扩展方法创建 DefaultEndpointRouteBuilder 作为 IEndpointRouteBuilder
+            // 2. 调用 IApplicationBuilder.UseEndpoints 扩展方法添加针对 IEndpointRouteBuilder 的配置
+            // 3. 利用 DefaultEndpointRouteBuilder 执行配置注册 EndpointDataSource
 
-            // 如果利用 WebApplication 作为 IApplicationBuilder 没有调用 IApplicationBuilder.UseRouting 扩展方法
-            // 则需要利用当前 IApplicationBuilder 调用 IApplicationBuilder.UseRouting 扩展方法
-            // 主要完成两个功能：
-            // 1. 确保注册 EndpointRoutingMiddleware 中间件
-            // 2. 利用 WebApplication 作为 IEndpointRouteBuilder 传递给 EndpointRoutingMiddleware 的构造函数
+            // 如果使用 WebApplication 作为 IApplicationBuilder 时没有调用 IApplicationBuilder.UseRouting 扩展方法
+            // 则需要利用当前 IApplicationBuilder 调用 IApplicationBuilder.UseRouting 扩展方法确保注册 EndpointRoutingMiddleware 中间件
+            // 并且利用 WebApplication 作为 IEndpointRouteBuilder 以外部参数形式传递给 EndpointRoutingMiddleware 的构造函数
             if (!_builtApplication.Properties.TryGetValue(EndpointRouteBuilderKey, out var localRouteBuilder))
             {
                 app.UseRouting();
@@ -700,13 +697,16 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
         }
  
         // 注册导线中间件
+        // 使用 WebApplication 作为 IApplicationBuilder 时注册的中间件
+        // 最终会处在 EndpointRoutingMiddleware 和 EndpointMiddleware 这两个中间件的中间位置
         var wireSourcePipeline = new WireSourcePipeline(_builtApplication);
         app.Use(wireSourcePipeline.CreateMiddleware);
 
         // 如果利用 WebApplication 作为 IEndpointRouteBuilder 注册了 EndpointDataSource
         if (_builtApplication.DataSources.Count > 0)
         {
-            // 确保注册 EndpointMiddleware 中间件
+            // 如果使用 WebApplication 作为 IApplicationBuilder 时没有调用 IApplicationBuilder.UseEndpoints 扩展方法
+            // 则需要利用当前 IApplicationBuilder 调用 IApplicationBuilder.UseEndpoints 扩展方法确保注册 EndpointMiddleware 中间件
             app.UseEndpoints(_ => { });
         }
  
