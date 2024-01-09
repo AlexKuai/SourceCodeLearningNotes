@@ -677,20 +677,31 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
             }
         }
  
+        // 实际返回 CallSiteFactory
         var serviceProviderIsService = _builtApplication.Services.GetService<IServiceProviderIsService>();
+        // 检查是否注册了 IAuthenticationSchemeProvider 服务
+        // 如果注册了则需要确保注册 AuthenticationMiddleware 中间件
         if (serviceProviderIsService?.IsService(typeof(IAuthenticationSchemeProvider)) is true)
         {
+            // 如果没有利用 WebApplication 作为 IApplicationBuilder 时调用 IApplicationBuilder.UseAuthentication 扩展方法
             if (!_builtApplication.Properties.ContainsKey(AuthenticationMiddlewareSetKey))
             {
+                // 则需要利用当前 IApplicationBuilder 调用 IApplicationBuilder.UseAuthentication 扩展方法
+                // 确保注册 AuthenticationMiddleware 中间件
                 _builtApplication.Properties[AuthenticationMiddlewareSetKey] = true;
                 app.UseAuthentication();
             }
         }
- 
+
+        // 检查是否注册了 IAuthenticationSchemeProvider 服务
+        // 如果注册了则需要确保注册 AuthorizationMiddleware 中间件
         if (serviceProviderIsService?.IsService(typeof(IAuthorizationHandlerProvider)) is true)
         {
+            // 如果没有利用 WebApplication 作为 IApplicationBuilder 时调用 IApplicationBuilder.UseAuthorization 扩展方法
             if (!_builtApplication.Properties.ContainsKey(AuthorizationMiddlewareSetKey))
             {
+                // 则需要利用当前 IApplicationBuilder 调用 IApplicationBuilder.UseAuthorization 扩展方法
+                // 确保注册 AuthorizationMiddleware 中间件
                 _builtApplication.Properties[AuthorizationMiddlewareSetKey] = true;
                 app.UseAuthorization();
             }
