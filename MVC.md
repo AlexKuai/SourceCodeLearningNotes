@@ -173,7 +173,7 @@ public class AssemblyPart : ApplicationPart, IApplicationPartTypeProvider
  
     public override string Name => Assembly.GetName().Name!;
  
-    // 返回程序集中定义的所有类型
+    // 返回程序集中定义的类型
     public IEnumerable<TypeInfo> Types => Assembly.DefinedTypes;
 }
 ```
@@ -1177,11 +1177,6 @@ internal sealed class ApiBehaviorApplicationModelProvider : IApplicationModelPro
  
     public List<IActionModelConvention> ActionModelConventions { get; }
  
-    public void OnProvidersExecuted(ApplicationModelProviderContext context)
-    {
-        // 后置方法不做任何处理
-    }
- 
     public void OnProvidersExecuting(ApplicationModelProviderContext context)
     {
         // 遍历 ApplicationModel.Controllers 集合
@@ -1195,17 +1190,22 @@ internal sealed class ApiBehaviorApplicationModelProvider : IApplicationModelPro
  
             foreach (var action in controller.Actions)
             {
-                // 确保配置了特性路由
+                // 绑定了 ApiControllerAttribute 特性的控制器方法必须确保配置了特性路由
                 EnsureActionIsAttributeRouted(action);
 
-                // 遍历 ActionModelConventions 集合
-                // 对 ActionModel 应用配置
+                // 遍历 IActionModelConventions 集合
+                // 应用配置配置 ActionModel
                 foreach (var convention in ActionModelConventions)
                 {
                     convention.Apply(action);
                 }
             }
         }
+    }
+
+    public void OnProvidersExecuted(ApplicationModelProviderContext context)
+    {
+        // 后置方法不做任何处理
     }
     
     // 确保在控制器上或 Action 方法上绑定实现了 IRouteTemplateProvider 的特性
@@ -1290,6 +1290,7 @@ internal sealed class ApplicationModelFactory
             _applicationModelProviders[i].OnProvidersExecuted(context);
         }
  
+        // 应用配置配置 ApplicationModel
         ApplicationModelConventions.ApplyConventions(context.Result, _conventions);
  
         return context.Result;
@@ -1380,6 +1381,7 @@ internal sealed partial class DefaultActionDescriptorCollectionProvider : Action
         IEnumerable<IActionDescriptorChangeProvider> actionDescriptorChangeProviders,
         ILogger<DefaultActionDescriptorCollectionProvider> logger)
     {
+        // 对注入的 IActionDescriptorProvider 集合升序排序
         _actionDescriptorProviders = actionDescriptorProviders
             .OrderBy(p => p.Order)
             .ToArray();
@@ -1723,7 +1725,7 @@ internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSou
 
     public bool CreateInertEndpoints { get; set; }
  
-    // 利用路由模板构建基于约定路由的 ConventionalRouteEntry
+    // 添加路由模板创建基于约定路由的 ConventionalRouteEntry
     public ControllerActionEndpointConventionBuilder AddRoute(
         string routeName,
         string pattern,
@@ -1864,7 +1866,7 @@ internal sealed class ActionEndpointFactory
             foreach (var route in routes)
             {
                 // 利用 ActionDescriptor 中的路由值字典匹配 RoutePattern
-                // 如果匹配上则创建新的 RoutePattern 并使用 ActionDescriptor 中的路由值字典填充 RoutePattern.RequiredValues 字典
+                // 如果匹配上则返回拷贝的 RoutePattern 并使用 ActionDescriptor 中的路由值字典填充 RoutePattern.RequiredValues 字典
                 var updatedRoutePattern = _routePatternTransformer.SubstituteRequiredValues(route.Pattern, action.RouteValues);
                 // 没有匹配上则跳过继续
                 if (updatedRoutePattern == null)
@@ -1906,7 +1908,7 @@ internal sealed class ActionEndpointFactory
         {
             // 利用 ActionDescriptor 创建 RequestDelegate
             var requestDelegate = CreateRequestDelegate(action) ?? _requestDelegate;
-            // 利用特性路由信息创建 RoutePattern
+            // 利用 ActionDescriptor.AttributeRouteInfo 创建 RoutePattern
             var attributeRoutePattern = RoutePatternFactory.Parse(action.AttributeRouteInfo.Template);
  
             // 利用 ActionDescriptor 中的路由值字典填充 RoutePattern.RequiredValues 字典
@@ -1985,7 +1987,7 @@ internal sealed class ActionEndpointFactory
             EndpointMetadataPopulator.PopulateMetadata(controllerActionDescriptor.MethodInfo, builder);
         }
  
-        // 将 ActionDescriptor 中的元数据全部转移到 EndpointBuilder 元数据集合中
+        // 将 ActionDescriptor.EndpointMetadata 中的元数据全部转移到 EndpointBuilder 的元数据集合中
         if (action.EndpointMetadata != null)
         {
             foreach (var d in action.EndpointMetadata)
@@ -1997,7 +1999,7 @@ internal sealed class ActionEndpointFactory
         // 将 ActionDescriptor 添加到 EndpointBuilder 元数据集合中
         builder.Metadata.Add(action);
 
-        // 将路由名称添加到 EndpointBuilder 元数据集合中
+        // 将路由名称添加到 EndpointBuilder 的元数据集合中
         if (routeName != null &&
             !suppressLinkGeneration &&
             routeNames.Add(routeName) &&
@@ -2013,7 +2015,7 @@ internal sealed class ActionEndpointFactory
  
         builder.Metadata.Add(new RouteNameMetadata(routeName));
  
-        // 将所有 ActionDescriptor.FilterDescriptors 中的 IFilterMetadata 过滤器添加到 EndpointBuilder 元数据集合中
+        // 将 ActionDescriptor.FilterDescriptors 中的 IFilterMetadata 过滤器添加到 EndpointBuilder 的元数据集合中
         if (action.FilterDescriptors != null && action.FilterDescriptors.Count > 0)
         {
             foreach (var filter in action.FilterDescriptors.OrderBy(f => f, FilterDescriptorOrderComparer.Comparer).Select(f => f.Filter))
@@ -2030,15 +2032,14 @@ internal sealed class ActionEndpointFactory
                 if (actionConstraint is HttpMethodActionConstraint httpMethodActionConstraint &&
                     !builder.Metadata.OfType<HttpMethodMetadata>().Any())
                 {
-                    // 存在 HttpMethodActionConstraint，则 EndpointBuilder 元数据集合中必须存在 HttpMethodMetadata
+                    // 如果存在 HttpMethodActionConstraint 则 EndpointBuilder 的元数据集合中必须存在 HttpMethodMetadata
                     // 用于路由匹配
                     builder.Metadata.Add(new HttpMethodMetadata(httpMethodActionConstraint.HttpMethods));
                 }
                 else if (actionConstraint is ConsumesAttribute consumesAttribute &&
                     !builder.Metadata.OfType<AcceptsMetadata>().Any())
                 {
-                    // 存在 ConsumesAttribute，则 EndpointBuilder 元数据集合中必须存在 AcceptsMetadata
-                    // 用于过滤器检查请求的 Content-Type 是否为满足的媒体类型
+                    // 存在 ConsumesAttribute 则 EndpointBuilder 的元数据集合中必须存在 AcceptsMetadata
                     builder.Metadata.Add(new AcceptsMetadata(consumesAttribute.ContentTypes.ToArray()));
                 }
                 else if (!builder.Metadata.Contains(actionConstraint))
@@ -2049,14 +2050,14 @@ internal sealed class ActionEndpointFactory
         }
  
         // 将 SuppressLinkGenerationMetadata 添加到 EndpointBuilder 元数据集合中
-        // 基于约定的入站路由静止生成 Link 链接
+        // 创建基于约定的入站路由则禁止生成 Link 链接
         if (suppressLinkGeneration)
         {
             builder.Metadata.Add(new SuppressLinkGenerationMetadata());
         }
  
         // 将 SuppressMatchingMetadata 添加到 EndpointBuilder 元数据集合中
-        // 基于约定的出站路由静止匹配
+        // 创建基于约定的出站路由则禁止匹配
         if (suppressPathMatching)
         {
             builder.Metadata.Add(new SuppressMatchingMetadata());
@@ -2122,7 +2123,7 @@ internal sealed class ActionEndpointFactory
         // 遍历 IRequestDelegateFactory 集合
         foreach (var factory in _requestDelegateFactories)
         {
-            // 每个 IRequestDelegateFactory 内部会根据 ActionDescriptor 的具体类型决定是否由自己创建对应的 RequestDelegate
+            // 每个 IRequestDelegateFactory 内部会根据 ActionDescriptor 的实际类型决定是否由自己创建对应的 RequestDelegate
             // 如果不是则返回 null，继续交由下一个 IRequestDelegateFactory 处理
             var requestDelegate = factory.CreateRequestDelegate(action, dataTokens);
             if (requestDelegate != null)
@@ -2135,3 +2136,134 @@ internal sealed class ActionEndpointFactory
     }
 }
 ```
+
+## 注册终结点
+
+- ControllerEndpointRouteBuilderExtensions
+
+```C#
+// 提供用来注册路由系统终结点的扩展方法
+public static class ControllerEndpointRouteBuilderExtensions
+{
+    // 注册特性路由系统终结点
+    public static ControllerActionEndpointConventionBuilder MapControllers(this IEndpointRouteBuilder endpoints)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+
+        // 确保 IServiceCollection.AddControllers 扩展方法被调用
+        EnsureControllerServices(endpoints);
+
+        // 创建 ControllerActionEndpointDataSource
+        return GetOrCreateDataSource(endpoints).DefaultBuilder;
+    }
+
+    // 注册约定路由系统终结点
+    public static ControllerActionEndpointConventionBuilder MapControllerRoute(
+        this IEndpointRouteBuilder endpoints,
+        string name,
+        string pattern,
+        object? defaults = null,
+        object? constraints = null,
+        object? dataTokens = null)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+ 
+        // 确保 IServiceCollection.AddControllers 扩展方法被调用
+        EnsureControllerServices(endpoints);
+ 
+        // 创建 ControllerActionEndpointDataSource
+        var dataSource = GetOrCreateDataSource(endpoints);
+        // 添加路有模板，创建 ConventionalRouteEntry
+        return dataSource.AddRoute(
+            name,
+            pattern,
+            new RouteValueDictionary(defaults),
+            new RouteValueDictionary(constraints),
+            new RouteValueDictionary(dataTokens));
+    }
+
+    // 注册默认的约定路由系统终结点
+    public static ControllerActionEndpointConventionBuilder MapDefaultControllerRoute(this IEndpointRouteBuilder endpoints)
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+ 
+        // 确保 IServiceCollection.AddControllers 扩展方法被调用
+        EnsureControllerServices(endpoints);
+ 
+        // 创建 ControllerActionEndpointDataSource
+        var dataSource = GetOrCreateDataSource(endpoints);
+        // 添加默认路由模板，创建 ConventionalRouteEntry
+        return dataSource.AddRoute(
+            "default",
+            "{controller=Home}/{action=Index}/{id?}",
+            defaults: null,
+            constraints: null,
+            dataTokens: null);
+    }
+
+    // 确保 IServiceCollection.AddControllers 扩展方法被调用
+    private static void EnsureControllerServices(IEndpointRouteBuilder endpoints)
+    {
+        var marker = endpoints.ServiceProvider.GetService<MvcMarkerService>();
+        if (marker == null)
+        {
+            throw new InvalidOperationException(Resources.FormatUnableToFindServices(
+                nameof(IServiceCollection),
+                "AddControllers",
+                "ConfigureServices(...)"));
+        }
+    }
+ 
+    // 创建 ControllerActionEndpointDataSource
+    private static ControllerActionEndpointDataSource GetOrCreateDataSource(IEndpointRouteBuilder endpoints)
+    {
+        var dataSource = endpoints.DataSources.OfType<ControllerActionEndpointDataSource>().FirstOrDefault();
+        if (dataSource == null)
+        {
+            // 得到 OrderedEndpointsSequenceProviderCache 服务
+            // 用于给创建的约定路由系统终结点编号
+            var orderProvider = endpoints.ServiceProvider.GetRequiredService<OrderedEndpointsSequenceProviderCache>();
+            // 得到 ControllerActionEndpointDataSourceFactory
+            var factory = endpoints.ServiceProvider.GetRequiredService<ControllerActionEndpointDataSourceFactory>();
+            // 利用 ControllerActionEndpointDataSourceFactory 创建 ControllerActionEndpointDataSource
+            dataSource = factory.Create(orderProvider.GetOrCreateOrderedEndpointsSequenceProvider(endpoints));
+            // 将 ControllerActionEndpointDataSource 添加到 IEndpointRouteBuilder.DataSources 属性表示的 EndpointDataSource 集合中
+            endpoints.DataSources.Add(dataSource);
+        }
+ 
+        return dataSource;
+    }
+}
+```
+
+- ControllerActionEndpointDataSourceFactory
+
+```C#
+// ControllerActionEndpointDataSource 工厂
+internal sealed class ControllerActionEndpointDataSourceFactory
+{
+    // 用于给 ControllerActionEndpointDataSource 创建自增 Id
+    private readonly ControllerActionEndpointDataSourceIdProvider _dataSourceIdProvider;
+    private readonly IActionDescriptorCollectionProvider _actions;
+    private readonly ActionEndpointFactory _factory;
+ 
+    public ControllerActionEndpointDataSourceFactory(
+        ControllerActionEndpointDataSourceIdProvider dataSourceIdProvider,
+        IActionDescriptorCollectionProvider actions,
+        ActionEndpointFactory factory)
+    {
+        // 注入 IActionDescriptorCollectionProvider 和 ActionEndpointFactory
+        _dataSourceIdProvider = dataSourceIdProvider;
+        _actions = actions;
+        _factory = factory;
+    }
+    
+    // 创建 ControllerActionEndpointDataSource
+    public ControllerActionEndpointDataSource Create(OrderedEndpointsSequenceProvider orderProvider)
+    {
+        return new ControllerActionEndpointDataSource(_dataSourceIdProvider, _actions, _factory, orderProvider);
+    }
+}
+```
+
+## Action 管道构建
