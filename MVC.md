@@ -41,6 +41,17 @@
 - IActionInvoker  
 - ResourceInvoker  
 - ControllerActionInvoker  
+- ProblemDetails  
+- ProblemDetailsClientErrorFactory  
+- DefaultProblemDetailsFactory  
+- IFilterMetadata  
+- IOrderedFilter  
+- IFilterFactory  
+- TypeFilterAttribute  
+- ClientErrorResultFilterFactory  
+- ClientErrorResultFilter  
+- ModelStateInvalidFilterFactory  
+- ModelStateInvalidFilter  
 
 ## MVC 应用模型
 
@@ -3728,7 +3739,7 @@ internal abstract partial class ResourceInvoker
                     {
                         _logger.ResultFilterShortCircuited(filter);
                         
-                        // 跳过后续 IResultFilter.OnResultExecuted 方法执行
+                        // 跳过后续过滤器管线执行
                         _resultExecutedContext = new ResultExecutedContextSealed(
                             resultExecutingContext,
                             _filters,
@@ -3787,6 +3798,8 @@ internal abstract partial class ResourceInvoker
  
             case State.ResultInside:
                 {
+                    // ResultExecutingContext.Result 属性不为 null
+                    // 则覆盖执行动作方法得到的 IActionResult
                     if (_resultExecutingContext != null)
                     {
                         _result = _resultExecutingContext.Result;
@@ -4324,6 +4337,400 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
             // 等待 ValueTask<IActionResult>
             invoker._result = await actionResultValueTask;
         }
+    }
+}
+```
+
+## 过滤器
+
+- ProblemDetails
+
+```C#
+// 表示问题消息消息
+public class ProblemDetails
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyOrder(-5)]
+    public string? Type { get; set; }
+ 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyOrder(-4)]
+    public string? Title { get; set; }
+ 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyOrder(-3)]
+    public int? Status { get; set; }
+ 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyOrder(-2)]
+    public string? Detail { get; set; }
+ 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyOrder(-1)]
+    public string? Instance { get; set; }
+ 
+    [JsonExtensionData]
+    public IDictionary<string, object?> Extensions { get; set; } = new Dictionary<string, object?>(StringComparer.Ordinal);
+}
+```
+
+- ProblemDetailsClientErrorFactory
+
+```C#
+// 用于提供给客户端封装问题详细消息的 IActionResult 工厂
+internal sealed class ProblemDetailsClientErrorFactory : IClientErrorFactory
+{
+    private readonly ProblemDetailsFactory _problemDetailsFactory;
+ 
+    public ProblemDetailsClientErrorFactory(ProblemDetailsFactory problemDetailsFactory)
+    {
+        _problemDetailsFactory = problemDetailsFactory ?? throw new ArgumentNullException(nameof(problemDetailsFactory));
+    }
+    
+    // 返回 ObjectResult 对象（实现 IActionResult）
+    // 用户为客户端提供问题详细的 Json 消息
+    public IActionResult GetClientError(ActionContext actionContext, IClientErrorActionResult clientError)
+    {
+        // 通过 ProblemDetailsFactory 创建 ProblemDetails 对象
+        var problemDetails = _problemDetailsFactory.CreateProblemDetails(actionContext.HttpContext, clientError.StatusCode);
+ 
+        return new ObjectResult(problemDetails)
+        {
+            StatusCode = problemDetails.Status,
+            ContentTypes =
+                {
+                    "application/problem+json",
+                    "application/problem+xml",
+                },
+        };
+    }
+}
+```
+
+- DefaultProblemDetailsFactory
+
+```C#
+// ProblemDetailsFactory 的子类
+// 提供问题详细消息的默认实现
+internal sealed class DefaultProblemDetailsFactory : ProblemDetailsFactory
+{
+    private readonly ApiBehaviorOptions _options;
+    private readonly Action<ProblemDetailsContext>? _configure;
+ 
+    public DefaultProblemDetailsFactory(
+        IOptions<ApiBehaviorOptions> options,
+        IOptions<ProblemDetailsOptions>? problemDetailsOptions = null)
+    {
+        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _configure = problemDetailsOptions?.Value?.CustomizeProblemDetails;
+    }
+ 
+    // 提供 500 错误的问题详细消息
+    public override ProblemDetails CreateProblemDetails(
+        HttpContext httpContext,
+        int? statusCode = null,
+        string? title = null,
+        string? type = null,
+        string? detail = null,
+        string? instance = null)
+    {
+        statusCode ??= 500;
+ 
+        var problemDetails = new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title,
+            Type = type,
+            Detail = detail,
+            Instance = instance,
+        };
+ 
+        ApplyProblemDetailsDefaults(httpContext, problemDetails, statusCode.Value);
+ 
+        return problemDetails;
+    }
+    
+    // 提供 400 错误的问题详细消息
+    public override ValidationProblemDetails CreateValidationProblemDetails(
+        HttpContext httpContext,
+        ModelStateDictionary modelStateDictionary,
+        int? statusCode = null,
+        string? title = null,
+        string? type = null,
+        string? detail = null,
+        string? instance = null)
+    {
+        ArgumentNullException.ThrowIfNull(modelStateDictionary);
+ 
+        statusCode ??= 400;
+ 
+        var problemDetails = new ValidationProblemDetails(modelStateDictionary)
+        {
+            Status = statusCode,
+            Type = type,
+            Detail = detail,
+            Instance = instance,
+        };
+ 
+        if (title != null)
+        {
+            problemDetails.Title = title;
+        }
+ 
+        ApplyProblemDetailsDefaults(httpContext, problemDetails, statusCode.Value);
+ 
+        return problemDetails;
+    }
+    
+    // 根据状态码应用基于 RFC 9110 规范的默认值
+    private void ApplyProblemDetailsDefaults(HttpContext httpContext, ProblemDetails problemDetails, int statusCode)
+    {
+        problemDetails.Status ??= statusCode;
+ 
+        if (_options.ClientErrorMapping.TryGetValue(statusCode, out var clientErrorData))
+        {
+            problemDetails.Title ??= clientErrorData.Title;
+            problemDetails.Type ??= clientErrorData.Link;
+        }
+
+        // 如果利用 Activity 开启了针对请求范围的活动跟踪
+        // 则可以利用 Activity.Id 属性标识问题的追踪 ID
+        var traceId = Activity.Current?.Id ?? httpContext?.TraceIdentifier;
+        if (traceId != null)
+        {
+            problemDetails.Extensions["traceId"] = traceId;
+        }
+ 
+        _configure?.Invoke(new() { HttpContext = httpContext!, ProblemDetails = problemDetails });
+    }
+}
+```
+
+- IFilterMetadata
+
+```C#
+// 标记过滤器的空接口
+public interface IFilterMetadata
+{
+}
+```
+
+- IOrderedFilter
+
+```C#
+// 过滤器排序接口
+public interface IOrderedFilter : IFilterMetadata
+{
+    // 过滤器顺序
+    int Order { get; }
+}
+```
+
+- IFilterFactory
+
+```C#
+// 过滤器工厂接口
+public interface IFilterFactory : IFilterMetadata
+{
+    bool IsReusable { get; }
+    
+    // 创建过滤器实例
+    IFilterMetadata CreateInstance(IServiceProvider serviceProvider);
+}
+```
+
+- TypeFilterAttribute
+
+```C#
+// 基于类型的过滤器工厂
+public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
+{
+    private ObjectFactory? _factory;
+ 
+    public TypeFilterAttribute(Type type)
+    {
+        ImplementationType = type ?? throw new ArgumentNullException(nameof(type));
+    }
+ 
+    public object[]? Arguments { get; set; }
+ 
+    public Type ImplementationType { get; }
+    
+    // 默认创建的过滤器以 0 作为顺序
+    public int Order { get; set; }
+ 
+    public bool IsReusable { get; set; }
+ 
+    // 反射创建过滤器实例
+    // 并可以利用 HttpContext.RequestServices 属性表示的范围容器提供过滤器构造函数的参数
+    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+    {
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+ 
+        if (_factory == null)
+        {
+            var argumentTypes = Arguments?.Select(a => a.GetType())?.ToArray();
+            _factory = ActivatorUtilities.CreateFactory(ImplementationType, argumentTypes ?? Type.EmptyTypes);
+        }
+ 
+        var filter = (IFilterMetadata)_factory(serviceProvider, Arguments);
+        if (filter is IFilterFactory filterFactory)
+        {
+            filter = filterFactory.CreateInstance(serviceProvider);
+        }
+ 
+        return filter;
+    }
+}
+```
+
+- ClientErrorResultFilterFactory
+
+```C#
+// 客户端错误结果消息过滤器工厂
+internal sealed class ClientErrorResultFilterFactory : IFilterFactory, IOrderedFilter
+{
+    public int Order => ClientErrorResultFilter.FilterOrder;
+ 
+    public bool IsReusable => true;
+    
+    // 反射创建过滤器实例
+    // 并可以利用 HttpContext.RequestServices 属性表示的范围容器提供过滤器构造函数的参数
+    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+    {
+        var resultFilter = ActivatorUtilities.CreateInstance<ClientErrorResultFilter>(serviceProvider);
+        return resultFilter;
+    }
+}
+```
+
+- ClientErrorResultFilter
+
+```C#
+// 客户端错误结果消息过滤器
+// 实现了 IAlwaysRunResultFilter 接口，用于在流入管线短路时作为永远执行的结果过滤器
+internal sealed partial class ClientErrorResultFilter : IAlwaysRunResultFilter, IOrderedFilter
+{
+    internal const int FilterOrder = -2000;
+    private readonly IClientErrorFactory _clientErrorFactory;
+    private readonly ILogger<ClientErrorResultFilter> _logger;
+ 
+    public ClientErrorResultFilter(
+        IClientErrorFactory clientErrorFactory,
+        ILogger<ClientErrorResultFilter> logger)
+    {
+        _clientErrorFactory = clientErrorFactory ?? throw new ArgumentNullException(nameof(clientErrorFactory));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+ 
+    public int Order => FilterOrder;
+ 
+    public void OnResultExecuted(ResultExecutedContext context)
+    {
+    }
+ 
+    public void OnResultExecuting(ResultExecutingContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        // 只处理 ResultExecutingContext.Result 是实现了 IClientErrorActionResult 的 IActionResult
+        if (!(context.Result is IClientErrorActionResult clientError))
+        {
+            return;
+        }
+ 
+        // 只处理 400 和 500 的状态码
+        if (clientError.StatusCode < 400)
+        {
+            return;
+        }
+
+        // 得到封装了问题详细消息的 ObjectResult（实现 IActionResult）
+        var result = _clientErrorFactory.GetClientError(context, clientError);
+        if (result == null)
+        {
+            return;
+        }
+ 
+        Log.TransformingClientError(_logger, context.Result.GetType(), result.GetType(), clientError.StatusCode);
+        context.Result = result;
+    }
+ 
+    private static partial class Log
+    {
+        [LoggerMessage(49, LogLevel.Trace, "Replacing {InitialActionResultType} with status code {StatusCode} with {ReplacedActionResultType}.", EventName = "ClientErrorResultFilter")]
+        public static partial void TransformingClientError(ILogger logger, Type initialActionResultType, Type replacedActionResultType, int? statusCode);
+    }
+}
+```
+
+- ModelStateInvalidFilterFactory
+
+```C#
+// 无效模型状态过滤器工厂
+internal sealed class ModelStateInvalidFilterFactory : IFilterFactory, IOrderedFilter
+{
+    public int Order => ModelStateInvalidFilter.FilterOrder;
+ 
+    public bool IsReusable => true;
+ 
+    // 反射创建过滤器实例
+    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+    {
+        // 利用 HttpContext.RequestServices 属性表示的范围容器得到 IOptions<ApiBehaviorOptions> 服务
+        var options = serviceProvider.GetRequiredService<IOptions<ApiBehaviorOptions>>();
+        var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
+ 
+        return new ModelStateInvalidFilter(options.Value, loggerFactory.CreateLogger<ModelStateInvalidFilter>());
+    }
+}
+```
+
+- ModelStateInvalidFilter
+
+```C#
+// 无效模型状态过滤器
+public partial class ModelStateInvalidFilter : IActionFilter, IOrderedFilter
+{
+    internal const int FilterOrder = -2000;
+ 
+    private readonly ApiBehaviorOptions _apiBehaviorOptions;
+    private readonly ILogger _logger;
+ 
+    public ModelStateInvalidFilter(ApiBehaviorOptions apiBehaviorOptions, ILogger logger)
+    {
+        _apiBehaviorOptions = apiBehaviorOptions ?? throw new ArgumentNullException(nameof(apiBehaviorOptions));
+        // 如果 ApiBehaviorOptions.SuppressModelStateInvalidFilter 为 false
+        // 则必须存在无效模型问题详细消息工厂
+        if (!_apiBehaviorOptions.SuppressModelStateInvalidFilter && _apiBehaviorOptions.InvalidModelStateResponseFactory == null)
+        {
+            throw new ArgumentException(Resources.FormatPropertyOfTypeCannotBeNull(
+                typeof(ApiBehaviorOptions),
+                nameof(ApiBehaviorOptions.InvalidModelStateResponseFactory)));
+        }
+ 
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+ 
+    public int Order => FilterOrder;
+ 
+    public bool IsReusable => true;
+ 
+    public void OnActionExecuting(ActionExecutingContext context)
+    {
+        // 如果模型状态无效
+        if (context.Result == null && !context.ModelState.IsValid)
+        {
+            Log.ModelStateInvalidFilterExecuting(_logger);
+            // 利用 BadRequestObjectResult 对象（实现 IActionResult）封装问题详细消息
+            context.Result = _apiBehaviorOptions.InvalidModelStateResponseFactory(context);
+        }
+    }
+ 
+    private static partial class Log
+    {
+        [LoggerMessage(1, LogLevel.Debug, "The request has model state errors, returning an error response.", EventName = "ModelStateInvalidFilterExecuting")]
+        public static partial void ModelStateInvalidFilterExecuting(ILogger logger);
     }
 }
 ```
