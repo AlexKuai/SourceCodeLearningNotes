@@ -2,7 +2,45 @@
 
 ## 源码涉及的核心类型
 
-- ApplicationPartManager
+- ApplicationPartManager  
+- ApplicationPartFactory  
+- DefaultApplicationPartFactory  
+- IApplicationPartTypeProvider  
+- AssemblyPart  
+- IApplicationFeatureProvider\<TFeature\>  
+- ControllerFeature  
+- ControllerFeatureProvider  
+- ActionDescriptor  
+- ControllerActionDescriptor  
+- ActionDescriptorProviderContext  
+- IActionDescriptorProvider  
+- ControllerActionDescriptorProvider  
+- ApplicationModel  
+- ControllerModel  
+- ActionModel  
+- SelectorModel  
+- IApplicationModelConvention  
+- ApplicationModelProviderContext  
+- IApplicationModelProvider  
+- DefaultApplicationModelProvider  
+- ApiBehaviorApplicationModelProvider  
+- ApplicationModelFactory  
+- IActionDescriptorChangeProvider  
+- ActionDescriptorChangeProvider  
+- IActionDescriptorCollectionProvider  
+- ActionDescriptorCollectionProvider  
+- DefaultActionDescriptorCollectionProvider  
+- ControllerActionEndpointConventionBuilder  
+- ActionEndpointDataSourceBase  
+- ControllerActionEndpointDataSource  
+- ActionEndpointFactory  
+- ControllerEndpointRouteBuilderExtensions  
+- ControllerActionEndpointDataSourceFactory  
+- IRequestDelegateFactory  
+- ControllerRequestDelegateFactory  
+- IActionInvoker  
+- ResourceInvoker  
+- ControllerActionInvoker  
 
 ## MVC 应用模型
 
@@ -319,7 +357,7 @@ public class ActionDescriptor
 }
 ```
 
--- ControllerActionDescriptor
+- ControllerActionDescriptor
 
 ```C#
 // 基于控制器的 ActionDescriptor
@@ -1744,6 +1782,7 @@ internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSou
     }
     
     // 利用 ControllerActionDescriptor 创建 Endpoint 集合
+    // 每个 ControllerActionDescriptor 都会创建一个 Endpoint 
     protected override List<Endpoint> CreateEndpoints(
         RoutePattern? groupPrefix,
         IReadOnlyList<ActionDescriptor> actions,
@@ -1763,7 +1802,7 @@ internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSou
         // 每个基于约定的路由模板还会单独创建一个出站路由模式的 Endpoint 用于生成 Link 链接
         for (var i = 0; i < actions.Count; i++)
         {
-            // 只处理 ControllerActionDescriptor 类型
+            // 只处理 ControllerActionDescriptor 类型的 ActionDescriptor
             if (actions[i] is ControllerActionDescriptor action)
             {
                 // 创建 Endpoint
@@ -2266,4 +2305,2025 @@ internal sealed class ControllerActionEndpointDataSourceFactory
 }
 ```
 
-## Action 管道构建
+## Action 方法管线构建
+
+- IRequestDelegateFactory
+
+```C#
+// RequestDelegate 工厂接口
+internal interface IRequestDelegateFactory
+{
+    RequestDelegate? CreateRequestDelegate(ActionDescriptor actionDescriptor, RouteValueDictionary? dataTokens);
+}
+```
+
+- ControllerRequestDelegateFactory
+
+```C#
+// 基于 ControllerActionDescriptor 的 IRequestDelegateFactory 实现
+internal sealed class ControllerRequestDelegateFactory : IRequestDelegateFactory
+{
+    private readonly ControllerActionInvokerCache _controllerActionInvokerCache;
+    private readonly IReadOnlyList<IValueProviderFactory> _valueProviderFactories;
+    private readonly int _maxModelValidationErrors;
+    private readonly int? _maxValidationDepth;
+    private readonly int _maxModelBindingRecursionDepth;
+    private readonly ILogger _logger;
+    private readonly DiagnosticListener _diagnosticListener;
+    private readonly IActionResultTypeMapper _mapper;
+    private readonly IActionContextAccessor _actionContextAccessor;
+    private readonly bool _enableActionInvokers;
+ 
+    public ControllerRequestDelegateFactory(
+        ControllerActionInvokerCache controllerActionInvokerCache,
+        IOptions<MvcOptions> optionsAccessor,
+        ILoggerFactory loggerFactory,
+        DiagnosticListener diagnosticListener,
+        IActionResultTypeMapper mapper)
+        : this(controllerActionInvokerCache, optionsAccessor, loggerFactory, diagnosticListener, mapper, null)
+    {
+    }
+ 
+    public ControllerRequestDelegateFactory(
+        ControllerActionInvokerCache controllerActionInvokerCache,
+        IOptions<MvcOptions> optionsAccessor,
+        ILoggerFactory loggerFactory,
+        DiagnosticListener diagnosticListener,
+        IActionResultTypeMapper mapper,
+        IActionContextAccessor? actionContextAccessor)
+    {
+        _controllerActionInvokerCache = controllerActionInvokerCache;
+        _valueProviderFactories = optionsAccessor.Value.ValueProviderFactories.ToArray();
+        _maxModelValidationErrors = optionsAccessor.Value.MaxModelValidationErrors;
+        _maxValidationDepth = optionsAccessor.Value.MaxValidationDepth;
+        _maxModelBindingRecursionDepth = optionsAccessor.Value.MaxModelBindingRecursionDepth;
+        _enableActionInvokers = optionsAccessor.Value.EnableActionInvokers;
+        _logger = loggerFactory.CreateLogger<ControllerActionInvoker>();
+        _diagnosticListener = diagnosticListener;
+        _mapper = mapper;
+        _actionContextAccessor = actionContextAccessor ?? ActionContextAccessor.Null;
+    }
+    
+    // 利用 ControllerActionDescriptor 创建 RequestDelegate
+    public RequestDelegate? CreateRequestDelegate(ActionDescriptor actionDescriptor, RouteValueDictionary? dataTokens)
+    {
+        // 只处理 ControllerActionDescriptor 类型的 ActionDescriptor
+        if (_enableActionInvokers || actionDescriptor is not ControllerActionDescriptor controller)
+        {
+            return null;
+        }
+
+        return context =>
+        {
+            RouteData routeData;
+
+            // 在调用 IEndpointRouteBuilder.MapControllerRoute 扩展方法注册约定路由系统终结点时
+            // 可以传入 dataTokens 这个 object 类型的参数，并最终被转换为 RouteValueDictionary
+            // 用于为 ActionDescriptor.RouteValues 属性表示的路由值字典添加额外的路由值
+            if (dataTokens is null or { Count: 0 })
+            {
+                routeData = new RouteData(context.Request.RouteValues);
+            }
+            else
+            {
+                routeData = new RouteData();
+                routeData.PushState(router: null, context.Request.RouteValues, dataTokens);
+            }
+
+            // 根据每个请求的 HttpContext 利用 ControllerActionDescriptor 创建 ControllerContext
+            var controllerContext = new ControllerContext(context, routeData, controller)
+            {
+                ValueProviderFactories = new CopyOnWriteList<IValueProviderFactory>(_valueProviderFactories)
+            };
+ 
+            controllerContext.ModelState.MaxAllowedErrors = _maxModelValidationErrors;
+            controllerContext.ModelState.MaxValidationDepth = _maxValidationDepth;
+            controllerContext.ModelState.MaxStateDepth = _maxModelBindingRecursionDepth;
+ 
+            // 缓存管线所需的数据
+            // 在利用 ActionDescriptor.FilterDescriptors 得到 IFilterMetadata 过滤器集合时会先进行升序排序
+            // 没有实现 IOrderedFilter 的 IFilterMetadata 过滤器则拥有默认为 0 的顺序
+            // 实现了 IFilterFactory 的 IFilterMetadata 过滤器并不会缓存，而是在每次请求的管线执行前通过反射创建过滤器实例
+            // 并可以利用 HttpContext.RquestServices 属性表示的范围容器提供过滤器需要的服务
+            var (cacheEntry, filters) = _controllerActionInvokerCache.GetCachedResult(controllerContext);
+
+            // 创建 ControllerActionInvoker
+            var invoker = new ControllerActionInvoker(
+                _logger,
+                _diagnosticListener,
+                _actionContextAccessor,
+                _mapper,
+                controllerContext,
+                cacheEntry,
+                filters);
+
+            // 开始执行管线
+            return invoker.InvokeAsync();
+        };
+    }
+}
+```
+
+- IActionInvoker
+
+```C#
+// Action 方法执行器接口
+public interface IActionInvoker
+{
+    // 管线入口方法
+    Task InvokeAsync();
+}
+```
+
+- ResourceInvoker
+
+```C#
+// Action 方法执行器基类
+internal abstract partial class ResourceInvoker
+{
+    protected readonly DiagnosticListener _diagnosticListener;
+    protected readonly ILogger _logger;
+    protected readonly IActionContextAccessor _actionContextAccessor;
+    protected readonly IActionResultTypeMapper _mapper;
+    protected readonly ActionContext _actionContext;
+    protected readonly IFilterMetadata[] _filters;
+    protected readonly IList<IValueProviderFactory> _valueProviderFactories;
+ 
+    private AuthorizationFilterContextSealed? _authorizationContext;
+    private ResourceExecutingContextSealed? _resourceExecutingContext;
+    private ResourceExecutedContextSealed? _resourceExecutedContext;
+    private ExceptionContextSealed? _exceptionContext;
+    private ResultExecutingContextSealed? _resultExecutingContext;
+    private ResultExecutedContextSealed? _resultExecutedContext;
+ 
+    protected FilterCursor _cursor;
+    protected IActionResult? _result;
+    protected object? _instance;
+ 
+    public ResourceInvoker(
+        DiagnosticListener diagnosticListener,
+        ILogger logger,
+        IActionContextAccessor actionContextAccessor,
+        IActionResultTypeMapper mapper,
+        ActionContext actionContext,
+        IFilterMetadata[] filters,
+        IList<IValueProviderFactory> valueProviderFactories)
+    {
+        _diagnosticListener = diagnosticListener ?? throw new ArgumentNullException(nameof(diagnosticListener));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _actionContextAccessor = actionContextAccessor ?? throw new ArgumentNullException(nameof(actionContextAccessor));
+        _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
+        _actionContext = actionContext ?? throw new ArgumentNullException(nameof(actionContext));
+ 
+        _filters = filters ?? throw new ArgumentNullException(nameof(filters));
+        _valueProviderFactories = valueProviderFactories ?? throw new ArgumentNullException(nameof(valueProviderFactories));
+        _cursor = new FilterCursor(filters);
+    }
+
+    // 管线入口方法
+    public virtual Task InvokeAsync()
+    {
+        if (_diagnosticListener.IsEnabled() || _logger.IsEnabled(LogLevel.Information))
+        {
+            return Logged(this);
+        }
+ 
+        _actionContextAccessor.ActionContext = _actionContext;
+        var scope = _logger.ActionScope(_actionContext.ActionDescriptor);
+ 
+        Task task;
+        try
+        {
+            // InvokeFilterPipelineAsync 方法压栈
+            task = InvokeFilterPipelineAsync();
+        }
+        catch (Exception exception)
+        {
+            return Awaited(this, Task.FromException(exception), scope);
+        }
+
+        // 如果过滤器管线方法没有同步完成
+        if (!task.IsCompletedSuccessfully)
+        {
+            // InvokeAsync 方法出栈，返回一个用于等待的 Task
+            return Awaited(this, task, scope);
+        }
+ 
+        return ReleaseResourcesCore(scope).AsTask();
+
+        // 返回异步等待 Task
+        static async Task Awaited(ResourceInvoker invoker, Task task, IDisposable? scope)
+        {
+            try
+            {
+                await task;
+            }
+            finally
+            {
+                await invoker.ReleaseResourcesCore(scope);
+            }
+        }
+    }
+
+    // 执行过滤器管线
+    // 压栈 Scope.Invoker 管线范围
+    // 这是最外层的管线范围
+    private Task InvokeFilterPipelineAsync()
+    {
+        // 管线范围下一个管线执行状态置为 State.InvokeBegin
+        var next = State.InvokeBegin;
+
+        // 创建 Scope.Invoker 管线范围
+        var scope = Scope.Invoker;
+ 
+        var state = (object?)null;
+
+        var isCompleted = false;
+        try
+        {
+            while (!isCompleted)
+            {
+                // 利用状态机执行管线的下一个状态
+                var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
+                // 没有同步完成
+                if (!lastTask.IsCompletedSuccessfully)
+                {
+                    // 返回管线范围完成情况的 Task
+                    // 用于等待管线范围完成（出栈）
+                    return Awaited(this, lastTask, next, scope, state, isCompleted);
+                }
+            }
+ 
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+
+        static async Task Awaited(ResourceInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+        {
+            await lastTask;
+ 
+            while (!isCompleted)
+            {
+                await invoker.Next(ref next, ref scope, ref state, ref isCompleted);
+            }
+        }
+    }
+
+    // 基于状态机的管线执行方法
+    private Task Next(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)
+    {
+        switch (next)
+        {
+            case State.InvokeBegin:
+                {
+                    // 初始状态
+                    // 跳转到 State.AuthorizationBegin
+                    // 准备进入授权过滤器管线
+                    goto case State.AuthorizationBegin;
+                }
+ 
+            case State.AuthorizationBegin:
+                {
+                    // 重置过滤器游标
+                    _cursor.Reset();
+                    // 跳转到 State.AuthorizationNext
+                    // 开始授权过滤器管线
+                    goto case State.AuthorizationNext;
+                }
+ 
+            case State.AuthorizationNext:
+                {
+                    // 得到授权过滤器集合并将游标移动到下一个过滤器
+                    var current = _cursor.GetNextFilter<IAuthorizationFilter, IAsyncAuthorizationFilter>();
+                    // 优先作为 IAsyncAuthorizationFilter 授权过滤器
+                    if (current.FilterAsync != null)
+                    {
+                        if (_authorizationContext == null)
+                        {
+                            _authorizationContext = new AuthorizationFilterContextSealed(_actionContext, _filters);
+                        }
+                        
+                        state = current.FilterAsync;
+                        // 跳转到 State.AuthorizationAsyncBegin
+                        // 以异步方式执行授权过滤器
+                        goto case State.AuthorizationAsyncBegin;
+                    }
+                    else if (current.Filter != null)
+                    {
+                        if (_authorizationContext == null)
+                        {
+                            _authorizationContext = new AuthorizationFilterContextSealed(_actionContext, _filters);
+                        }
+ 
+                        state = current.Filter;
+                        // 跳转到 State.AuthorizationSync
+                        // 以同步方式执行授权过滤器
+                        goto case State.AuthorizationSync;
+                    }
+                    else
+                    {
+                        // 跳转到 State.AuthorizationEnd
+                        // 授权过滤器管线结束
+                        goto case State.AuthorizationEnd;
+                    }
+                }
+ 
+            case State.AuthorizationAsyncBegin:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_authorizationContext != null);
+ 
+                    var filter = (IAsyncAuthorizationFilter)state;
+                    var authorizationContext = _authorizationContext;
+ 
+                    _diagnosticListener.BeforeOnAuthorizationAsync(authorizationContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        FilterTypeConstants.AuthorizationFilter,
+                        nameof(IAsyncAuthorizationFilter.OnAuthorizationAsync),
+                        filter);
+
+                    // 执行 IAsyncAuthorizationFilter.OnAuthorizationAsync 方法
+                    var task = filter.OnAuthorizationAsync(authorizationContext);
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.AuthorizationAsyncEnd
+                        // 方法出栈，返回异步等待 Task
+                        next = State.AuthorizationAsyncEnd;
+                        return task;
+                    }
+
+                    // 同步完成
+                    // 跳转到 State.AuthorizationAsyncEnd
+                    goto case State.AuthorizationAsyncEnd;
+                }
+ 
+            case State.AuthorizationAsyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_authorizationContext != null);
+ 
+                    var filter = (IAsyncAuthorizationFilter)state;
+                    var authorizationContext = _authorizationContext;
+ 
+                    _diagnosticListener.AfterOnAuthorizationAsync(authorizationContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        FilterTypeConstants.AuthorizationFilter,
+                        nameof(IAsyncAuthorizationFilter.OnAuthorizationAsync),
+                        filter);
+
+                    // 如果 AuthorizationFilterContext.Result 属性不为 null
+                    // 跳转到 State.AuthorizationShortCircuit
+                    if (authorizationContext.Result != null)
+                    {
+                        goto case State.AuthorizationShortCircuit;
+                    }
+
+                    // 跳转到 State.AuthorizationNext
+                    // 继续执行下一个授权过滤器
+                    goto case State.AuthorizationNext;
+                }
+ 
+            case State.AuthorizationSync:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_authorizationContext != null);
+ 
+                    var filter = (IAuthorizationFilter)state;
+                    var authorizationContext = _authorizationContext;
+ 
+                    _diagnosticListener.BeforeOnAuthorization(authorizationContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        FilterTypeConstants.AuthorizationFilter,
+                        nameof(IAuthorizationFilter.OnAuthorization),
+                        filter);
+
+                    // 执行 IAuthorizationFilter.OnAuthorization 方法
+                    filter.OnAuthorization(authorizationContext);
+
+                    _diagnosticListener.AfterOnAuthorization(authorizationContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        FilterTypeConstants.AuthorizationFilter,
+                        nameof(IAuthorizationFilter.OnAuthorization),
+                        filter);
+
+                    // 如果 AuthorizationFilterContext.Result 属性不为 null
+                    // 跳转到 State.AuthorizationShortCircuit，短路管线
+                    if (authorizationContext.Result != null)
+                    {
+                        goto case State.AuthorizationShortCircuit;
+                    }
+
+                    // 跳转到 State.AuthorizationNext
+                    // 继续执行下一个授权过滤器
+                    goto case State.AuthorizationNext;
+                }
+ 
+            case State.AuthorizationShortCircuit:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_authorizationContext != null);
+                    Debug.Assert(_authorizationContext.Result != null);
+                    Log.AuthorizationFailure(_logger, (IFilterMetadata)state);
+
+                    // 设置外层管线范围结束（出栈）
+                    isCompleted = true;
+                    // 设置管线的执行结果
+                    _result = _authorizationContext.Result;
+                    // 压栈 Scope.Invoker 管线范围
+                    // InvokeAlwaysRunResultFilters 内部会创建 Scope.Invoker 管线范围
+                    // 返回管线范围完成情况的 Task
+                    // 用于等待管线范围完成（出栈）
+                    return InvokeAlwaysRunResultFilters();
+                }
+ 
+            case State.AuthorizationEnd:
+                {
+                    // 跳转到 State.ResourceBegin
+                    // 准备进入资源过滤器管线
+                    goto case State.ResourceBegin;
+                }
+ 
+            case State.ResourceBegin:
+                {
+                    // 重置过滤器游标
+                    _cursor.Reset();
+                    // 跳转到 State.ResourceNext
+                    // 开始资源过滤器管线
+                    goto case State.ResourceNext;
+                }
+ 
+            case State.ResourceNext:
+                {
+                    // 得到资源过滤器集合并将游标移动到下一个过滤器
+                    var current = _cursor.GetNextFilter<IResourceFilter, IAsyncResourceFilter>();
+                    // 优先作为 IAsyncResourceFilter 资源过滤器
+                    if (current.FilterAsync != null)
+                    {
+                        if (_resourceExecutingContext == null)
+                        {
+                            _resourceExecutingContext = new ResourceExecutingContextSealed(
+                                _actionContext,
+                                _filters,
+                                _valueProviderFactories);
+                        }
+ 
+                        state = current.FilterAsync;
+                        // 跳转到 State.ResourceAsyncBegin
+                        // 以异步方式执行资源过滤器
+                        goto case State.ResourceAsyncBegin;
+                    }
+                    else if (current.Filter != null)
+                    {
+                        if (_resourceExecutingContext == null)
+                        {
+                            _resourceExecutingContext = new ResourceExecutingContextSealed(
+                                _actionContext,
+                                _filters,
+                                _valueProviderFactories);
+                        }
+ 
+                        state = current.Filter;
+                        // 跳转到 State.ResourceSyncBegin
+                        // 以同步方式执行资源过滤器
+                        goto case State.ResourceSyncBegin;
+                    }
+                    else
+                    {
+                        // 跳转到 State.ResourceInside
+                        // 资源过滤器流入管线完成
+                        goto case State.ResourceInside;
+                    }
+                }
+ 
+            case State.ResourceAsyncBegin:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resourceExecutingContext != null);
+ 
+                    var filter = (IAsyncResourceFilter)state;
+                    var resourceExecutingContext = _resourceExecutingContext;
+ 
+                    _diagnosticListener.BeforeOnResourceExecution(resourceExecutingContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        FilterTypeConstants.ResourceFilter,
+                        nameof(IAsyncResourceFilter.OnResourceExecutionAsync),
+                        filter);
+ 
+                    // 执行 IAsyncResourceFilter.OnResourceExecutionAsync 方法
+                    // InvokeNextResourceFilterAwaitedAsync 方法内部会调用 InvokeNextResourceFilter 方法
+                    // 压栈 Scope.Resource 管线范围
+                    var task = filter.OnResourceExecutionAsync(resourceExecutingContext, InvokeNextResourceFilterAwaitedAsync);
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResourceAsyncEnd
+                        next = State.ResourceAsyncEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+ 
+                    // 跳转到 State.ResourceAsyncEnd
+                    goto case State.ResourceAsyncEnd;
+                }
+ 
+            case State.ResourceAsyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resourceExecutingContext != null);
+ 
+                    var filter = (IAsyncResourceFilter)state;
+                    try
+                    {
+                        if (_resourceExecutedContext == null)
+                        {
+                            _resourceExecutedContext = new ResourceExecutedContextSealed(_resourceExecutingContext, _filters)
+                            {
+                                Canceled = true,
+                                Result = _resourceExecutingContext.Result,
+                            };
+ 
+                            if (_resourceExecutingContext.Result != null)
+                            {
+                                goto case State.ResourceShortCircuit;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        _diagnosticListener.AfterOnResourceExecution(_resourceExecutedContext, filter);
+                        _logger.AfterExecutingMethodOnFilter(
+                            FilterTypeConstants.ResourceFilter,
+                            nameof(IAsyncResourceFilter.OnResourceExecutionAsync),
+                            filter);
+                    }
+                    
+                    // 跳转到 State.ResourceEnd
+                    goto case State.ResourceEnd;
+                }
+ 
+            case State.ResourceSyncBegin:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resourceExecutingContext != null);
+ 
+                    var filter = (IResourceFilter)state;
+                    var resourceExecutingContext = _resourceExecutingContext;
+ 
+                    _diagnosticListener.BeforeOnResourceExecuting(resourceExecutingContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        FilterTypeConstants.ResourceFilter,
+                        nameof(IResourceFilter.OnResourceExecuting),
+                        filter);
+ 
+                    // 执行 IResourceFilter.OnResourceExecuting 方法
+                    filter.OnResourceExecuting(resourceExecutingContext);
+ 
+                    _diagnosticListener.AfterOnResourceExecuting(resourceExecutingContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        FilterTypeConstants.ResourceFilter,
+                        nameof(IResourceFilter.OnResourceExecuting),
+                        filter);
+
+                    // 如果 ResourceExecutingContext.Result 属性不为 null
+                    // 跳转到 State.ResourceShortCircuit，短路管线
+                    if (resourceExecutingContext.Result != null)
+                    {
+                        _resourceExecutedContext = new ResourceExecutedContextSealed(resourceExecutingContext, _filters)
+                        {
+                            Canceled = true,
+                            Result = _resourceExecutingContext.Result,
+                        };
+ 
+                        // 跳转到 State.ResourceShortCircuit
+                        goto case State.ResourceShortCircuit;
+                    }
+
+                    // 压栈 Scope.Resource 管线范围
+                    // InvokeNextResourceFilter 方法内部会创建 Scope.Resource 管线范围
+                    var task = InvokeNextResourceFilter();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResourceSyncEnd
+                        next = State.ResourceSyncEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+                    
+                    // 跳转到 State.ResourceSyncEnd
+                    goto case State.ResourceSyncEnd;
+                }
+ 
+            case State.ResourceSyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resourceExecutingContext != null);
+                    Debug.Assert(_resourceExecutedContext != null);
+ 
+                    var filter = (IResourceFilter)state;
+                    var resourceExecutedContext = _resourceExecutedContext;
+ 
+                    _diagnosticListener.BeforeOnResourceExecuted(resourceExecutedContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        FilterTypeConstants.ResourceFilter,
+                        nameof(IResourceFilter.OnResourceExecuted),
+                        filter);
+ 
+                    // 执行 IResourceFilter.OnResourceExecuted 方法
+                    filter.OnResourceExecuted(resourceExecutedContext);
+ 
+                    _diagnosticListener.AfterOnResourceExecuted(resourceExecutedContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        FilterTypeConstants.ResourceFilter,
+                        nameof(IResourceFilter.OnResourceExecuted),
+                        filter);
+ 
+                    // 跳转到 State.ResourceEnd
+                    goto case State.ResourceEnd;
+                }
+ 
+            case State.ResourceShortCircuit:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resourceExecutingContext != null);
+                    Debug.Assert(_resourceExecutedContext != null);
+                    Log.ResourceFilterShortCircuited(_logger, (IFilterMetadata)state);
+ 
+                    // 设置管线的执行结果
+                    _result = _resourceExecutingContext.Result;
+                    // 压栈 Scope.Invoker 管线范围
+                    // InvokeAlwaysRunResultFilters 内部会创建 Scope.Invoker 管线范围
+                    // 返回管线范围完成情况的 Task
+                    // 用于等待管线范围完成（出栈）
+                    var task = InvokeAlwaysRunResultFilters();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResourceEnd
+                        next = State.ResourceEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+
+                    // 跳转到 State.ResourceEnd
+                    goto case State.ResourceEnd;
+                }
+ 
+            case State.ResourceInside:
+                {
+                    // 跳转到 State.ExceptionBegin
+                    // 准备进入异常过滤器管线
+                    goto case State.ExceptionBegin;
+                }
+ 
+            case State.ExceptionBegin:
+                {
+                    // 重置过滤器游标
+                    _cursor.Reset();
+                    // 跳转到 State.ExceptionNext
+                    // 开始异常过滤器管线
+                    goto case State.ExceptionNext;
+                }
+ 
+            case State.ExceptionNext:
+                {
+                    // 得到异常过滤器集合并将游标移动到下一个过滤器
+                    var current = _cursor.GetNextFilter<IExceptionFilter, IAsyncExceptionFilter>();
+                    // 优先作为 IAsyncExceptionFilter 异常过滤器
+                    if (current.FilterAsync != null)
+                    {
+                        state = current.FilterAsync;
+                        // 跳转到 State.ExceptionAsyncBegin
+                        goto case State.ExceptionAsyncBegin;
+                    }
+                    else if (current.Filter != null)
+                    {
+                        state = current.Filter;
+                        // 跳转到 State.ExceptionSyncBegin
+                        goto case State.ExceptionSyncBegin;
+                    }
+                    else if (scope == Scope.Exception)
+                    {
+                        // 这里只是为了确定存在异常过滤器
+                        // 跳转到 State.ExceptionInside
+                        // 由于异常过滤器在管线的流入方向上不工作
+                        // 只是构建 try...catch 块，用来捕获异常
+                        // 异常捕获范围包括
+                        // 1. 参数绑定
+                        // 2. 动作过滤器流入管线
+                        // 3. 动作方法执行
+                        // 4. 动作过滤器流出管线
+                        // 不包括授权过滤器、资源过滤器、结果过滤器以及 IActionResult 执行
+                        goto case State.ExceptionInside;
+                    }
+                    else
+                    {
+                        // 不存在异常过滤器
+                        Debug.Assert(scope == Scope.Invoker || scope == Scope.Resource);
+                        // 跳转到 State.ActionBegin
+                        // 准备进入动作过滤器管线
+                        goto case State.ActionBegin;
+                    }
+                }
+ 
+            case State.ExceptionAsyncBegin:
+                {
+                    // 压栈 Scope.Exception 管线范围
+                    var task = InvokeNextExceptionFilterAsync();
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ExceptionAsyncResume
+                        next = State.ExceptionAsyncResume;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+
+                    // 跳转到 State.ExceptionAsyncResume
+                    // 在管线流出方向上准备进入异常过滤器管线
+                    goto case State.ExceptionAsyncResume;
+                }
+ 
+            case State.ExceptionAsyncResume:
+                {
+                    Debug.Assert(state != null);
+ 
+                    var filter = (IAsyncExceptionFilter)state;
+                    var exceptionContext = _exceptionContext;
+
+                    // 如果捕获到异常并且标记未处理状态
+                    // 如果没有发生异常或标记已处理则跳过异常过滤器执行
+                    if (exceptionContext?.Exception != null && !exceptionContext.ExceptionHandled)
+                    {
+                        _diagnosticListener.BeforeOnExceptionAsync(exceptionContext, filter);
+                        _logger.BeforeExecutingMethodOnFilter(
+                            FilterTypeConstants.ExceptionFilter,
+                            nameof(IAsyncExceptionFilter.OnExceptionAsync),
+                            filter);
+ 
+                        // 执行 IAsyncExceptionFilter.OnExceptionAsync 方法
+                        var task = filter.OnExceptionAsync(exceptionContext);
+                        // 没有同步完成
+                        if (!task.IsCompletedSuccessfully)
+                        {
+                            // 当前管道范围下一个管线执行状态置为 State.ExceptionAsyncEnd
+                            // 方法出栈，返回异步等待 Task
+                            next = State.ExceptionAsyncEnd;
+                            return task;
+                        }
+ 
+                        // 跳转到 State.ExceptionAsyncEnd
+                        goto case State.ExceptionAsyncEnd;
+                    }
+
+                    // 跳转到 State.ExceptionEnd
+                    goto case State.ExceptionEnd;
+                }
+ 
+            case State.ExceptionAsyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_exceptionContext != null);
+ 
+                    var filter = (IAsyncExceptionFilter)state;
+                    var exceptionContext = _exceptionContext;
+ 
+                    _diagnosticListener.AfterOnExceptionAsync(exceptionContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        FilterTypeConstants.ExceptionFilter,
+                        nameof(IAsyncExceptionFilter.OnExceptionAsync),
+                        filter);
+ 
+                    if (exceptionContext.Exception == null || exceptionContext.ExceptionHandled)
+                    {
+                        _logger.ExceptionFilterShortCircuited(filter);
+                    }
+ 
+                    // 跳转到 State.ExceptionEnd
+                    goto case State.ExceptionEnd;
+                }
+ 
+            case State.ExceptionSyncBegin:
+                {
+                    // 压栈 Scope.Exception 管线范围
+                    var task = InvokeNextExceptionFilterAsync();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ExceptionSyncEnd
+                        next = State.ExceptionSyncEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+
+                    // 跳转到 State.ExceptionSyncEnd
+                    goto case State.ExceptionSyncEnd;
+                }
+ 
+            case State.ExceptionSyncEnd:
+                {
+                    Debug.Assert(state != null);
+ 
+                    var filter = (IExceptionFilter)state;
+                    var exceptionContext = _exceptionContext;
+ 
+                    // 如果捕获到异常并且标记未处理状态
+                    // 如果没有发生异常或标记已处理状态则跳过异常过滤器执行
+                    if (exceptionContext?.Exception != null && !exceptionContext.ExceptionHandled)
+                    {
+                        _diagnosticListener.BeforeOnException(exceptionContext, filter);
+                        _logger.BeforeExecutingMethodOnFilter(
+                            FilterTypeConstants.ExceptionFilter,
+                            nameof(IExceptionFilter.OnException),
+                            filter);
+
+                        // 执行 IExceptionFilter.OnException 方法
+                        filter.OnException(exceptionContext);
+ 
+                        _diagnosticListener.AfterOnException(exceptionContext, filter);
+                        _logger.AfterExecutingMethodOnFilter(
+                            FilterTypeConstants.ExceptionFilter,
+                            nameof(IExceptionFilter.OnException),
+                            filter);
+ 
+                        if (exceptionContext.Exception == null || exceptionContext.ExceptionHandled)
+                        {
+                            _logger.ExceptionFilterShortCircuited(filter);
+                        }
+                    }
+
+                    // 跳转到 State.ExceptionEnd
+                    goto case State.ExceptionEnd;
+                }
+ 
+            case State.ExceptionInside:
+                {
+                    // 跳转到 State.ActionBegin
+                    goto case State.ActionBegin;
+                }
+ 
+            case State.ExceptionHandled:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_exceptionContext != null);
+ 
+                    if (_exceptionContext.Result == null)
+                    {
+                        _exceptionContext.Result = new EmptyResult();
+                    }
+ 
+                    _result = _exceptionContext.Result;
+                    
+                    // 压栈 Scope.Invoker 管线范围
+                    var task = InvokeAlwaysRunResultFilters();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResourceInsideEnd
+                        next = State.ResourceInsideEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+
+                    // 跳转到 State.ResourceInsideEnd
+                    goto case State.ResourceInsideEnd;
+                }
+ 
+            case State.ExceptionEnd:
+                {
+                    var exceptionContext = _exceptionContext;
+                    
+                    // 如果当前处于 Scope.Exception 管线范围
+                    if (scope == Scope.Exception)
+                    {
+                        // 结束管线范围（出栈）
+                        isCompleted = true;
+                        return Task.CompletedTask;
+                    }
+
+                    // 全部 State.Exception 管线范围结束（出栈）
+                    // 如果捕获到异常
+                    if (exceptionContext != null)
+                    {
+                        // 如果异常已被处理，满足以下条件之一
+                        // 1. 标记已处理状态
+                        // 2. 原始异常已被清空
+                        // 3. ExceptionContext.Result 属性不为 null
+                        if (exceptionContext.Result != null ||
+                            exceptionContext.Exception == null ||
+                            exceptionContext.ExceptionHandled)
+                        {
+                            // 跳转到 State.ExceptionHandled
+                            // 执行短管线
+                            goto case State.ExceptionHandled;
+                        }
+
+                        // 重写抛出异常
+                        Rethrow(exceptionContext);
+                        Debug.Fail("unreachable");
+                    }
+
+                    // 压栈 Scope.Invoker 管线范围
+                    var task = InvokeResultFilters();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResourceInsideEnd
+                        next = State.ResourceInsideEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+                    // 跳转到 State.ResourceInsideEnd
+                    goto case State.ResourceInsideEnd;
+                }
+ 
+            case State.ActionBegin:
+                {
+                    // 压栈 Scope.Invoker 管线范围
+                    var task = InvokeInnerFilterAsync();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ActionEnd
+                        next = State.ActionEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+
+                    // 跳转到 State.ActionEnd
+                    goto case State.ActionEnd;
+                }
+ 
+            case State.ActionEnd:
+                {
+                    // 如果当前处于 Scope.Exception 管线范围
+                    // 没有发生异常
+                    // 结束管线范围（出栈）
+                    if (scope == Scope.Exception)
+                    {
+                        isCompleted = true;
+                        return Task.CompletedTask;
+                    }
+ 
+                    Debug.Assert(scope == Scope.Invoker || scope == Scope.Resource);
+                    // 压栈 Scope.Invoker 管线范围
+                    var task = InvokeResultFilters();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResourceInsideEnd
+                        next = State.ResourceInsideEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+                    // 跳转到 State.ResourceInsideEnd
+                    goto case State.ResourceInsideEnd;
+                }
+ 
+            case State.ResourceInsideEnd:
+                {
+                    // 如果当前处于 Scope.Resource 管线范围
+                    if (scope == Scope.Resource)
+                    {
+                        _resourceExecutedContext = new ResourceExecutedContextSealed(_actionContext, _filters)
+                        {
+                            Result = _result,
+                        };
+ 
+                        // 跳转到 State.ResourceEnd
+                        goto case State.ResourceEnd;
+                    }
+
+                    // 跳转到 State.InvokeEnd
+                    goto case State.InvokeEnd;
+                }
+ 
+            case State.ResourceEnd:
+                {
+                    // 如果当前处于 Scope.Resource 管线范围
+                    // 结束管线范围（出栈）
+                    if (scope == Scope.Resource)
+                    {
+                        isCompleted = true;
+                        return Task.CompletedTask;
+                    }
+ 
+                    Debug.Assert(scope == Scope.Invoker);
+                    Rethrow(_resourceExecutedContext!);
+
+                    // 跳转到 State.InvokeEnd
+                    // 所有 Scope.Resource 管线范围结束（出栈）
+                    goto case State.InvokeEnd;
+                }
+ 
+            case State.InvokeEnd:
+                {
+                    // 设置外层管线范围结束（出栈）
+                    isCompleted = true;
+                    return Task.CompletedTask;
+                }
+ 
+            default:
+                throw new InvalidOperationException();
+        }
+    }
+
+    // 资源过滤器后续管线入口方法
+    private Task<ResourceExecutedContext> InvokeNextResourceFilterAwaitedAsync()
+    {
+        Debug.Assert(_resourceExecutingContext != null);
+ 
+        // 不支持在 IAsyncResourceFilter 过滤器中设置 ResourceExecutingContext.Result 属性来短路管线
+        // 因为这样可能造成多次执行结果过滤器管线
+        if (_resourceExecutingContext.Result != null)
+        {
+            return Throw();
+        }
+
+        // 压栈 Scope.Resource 管线范围
+        var task = InvokeNextResourceFilter();
+        // 没有同步完成
+        if (!task.IsCompletedSuccessfully)
+        {
+            // 返回管线范围完成情况的 Task<ResourceExecutedContext>
+            // 用于等待管线范围完成（出栈）
+            return Awaited(this, task);
+        }
+ 
+        Debug.Assert(_resourceExecutedContext != null);
+        // 同步完成直接返回 Task<ResourceExecutedContext>
+        return Task.FromResult<ResourceExecutedContext>(_resourceExecutedContext);
+ 
+        static async Task<ResourceExecutedContext> Awaited(ResourceInvoker invoker, Task task)
+        {
+            await task;
+ 
+            Debug.Assert(invoker._resourceExecutedContext != null);
+            return invoker._resourceExecutedContext;
+        }
+#pragma warning disable CS1998
+        static async Task<ResourceExecutedContext> Throw()
+        {
+            var message = Resources.FormatAsyncResourceFilter_InvalidShortCircuit(
+                typeof(IAsyncResourceFilter).Name,
+                nameof(ResourceExecutingContext.Result),
+                typeof(ResourceExecutingContext).Name,
+                typeof(ResourceExecutionDelegate).Name);
+            throw new InvalidOperationException(message);
+        }
+#pragma warning restore CS1998
+    }
+
+    // 压栈 Scope.Resource 管线范围
+    private Task InvokeNextResourceFilter()
+    {
+        try
+        {
+            // 创建 Scope.Resource 管线范围
+            var scope = Scope.Resource;
+            // 管线范围下一个管线执行状态置为 State.ResourceNext
+            var next = State.ResourceNext;
+            var state = (object?)null;
+            var isCompleted = false;
+ 
+            while (!isCompleted)
+            {
+                // 利用状态机执行管线的下一个状态
+                var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
+
+                // 没有同步完成
+                if (!lastTask.IsCompletedSuccessfully)
+                {
+                    // 返回管线范围完成情况的 Task
+                    // 用于等待管线范围完成（出栈）
+                    return Awaited(this, lastTask, next, scope, state, isCompleted);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            _resourceExecutedContext = new ResourceExecutedContextSealed(_resourceExecutingContext!, _filters)
+            {
+                ExceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception),
+            };
+        }
+ 
+        Debug.Assert(_resourceExecutedContext != null);
+        return Task.CompletedTask;
+ 
+        static async Task Awaited(ResourceInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+        {
+            try
+            {
+                await lastTask;
+ 
+                while (!isCompleted)
+                {
+                    await invoker.Next(ref next, ref scope, ref state, ref isCompleted);
+                }
+            }
+            catch (Exception exception)
+            {
+                invoker._resourceExecutedContext = new ResourceExecutedContextSealed(invoker._resourceExecutingContext!, invoker._filters)
+                {
+                    ExceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception),
+                };
+            }
+ 
+            Debug.Assert(invoker._resourceExecutedContext != null);
+        }
+    }
+
+    // 压栈 Scope.Exception 管线范围
+    private Task InvokeNextExceptionFilterAsync()
+    {
+        try
+        {
+            // 管线范围下一个管线执行状态置为 State.ExceptionNext
+            var next = State.ExceptionNext;
+            var state = (object?)null;
+            // 创建 Scope.Exception 管线范围
+            var scope = Scope.Exception;
+            var isCompleted = false;
+            
+            while (!isCompleted)
+            {
+                // 利用状态机执行管线的下一个状态
+                var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
+                // 没有同步完成
+                if (!lastTask.IsCompletedSuccessfully)
+                {
+                    // 返回管线范围完成情况的 Task
+                    // 用于等待管线范围完成（出栈）
+                    return Awaited(this, lastTask, next, scope, state, isCompleted);
+                }
+            }
+ 
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+ 
+        static async Task Awaited(ResourceInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+        {
+            try
+            {
+                await lastTask;
+ 
+                while (!isCompleted)
+                {
+                    await invoker.Next(ref next, ref scope, ref state, ref isCompleted);
+                }
+            }
+            catch (Exception exception)
+            {
+                // 在 Scope.Exception 管线范围内捕获异常
+                invoker._exceptionContext = new ExceptionContextSealed(invoker._actionContext, invoker._filters)
+                {
+                    ExceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception),
+                };
+            }
+        }
+    }
+
+    // 压栈 Scope.Invoker 管线范围
+    private Task InvokeAlwaysRunResultFilters()
+    {
+        try
+        {
+            // 管线范围下一个管线执行状态置为 State.ResultBegin
+            var next = State.ResultBegin;
+            // 创建 Scope.Invoker 管线范围
+            var scope = Scope.Invoker;
+            var state = (object?)null;
+            var isCompleted = false;
+ 
+            while (!isCompleted)
+            {
+                // 利用状态机执行管线的下一个状态
+                var lastTask = ResultNext<IAlwaysRunResultFilter, IAsyncAlwaysRunResultFilter>(ref next, ref scope, ref state, ref isCompleted);
+                // 没有同步完成
+                if (!lastTask.IsCompletedSuccessfully)
+                {
+                    // 返回管线范围完成情况的 Task
+                    // 用于等待管线范围完成（出栈）
+                    return Awaited(this, lastTask, next, scope, state, isCompleted);
+                }
+            }
+ 
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+ 
+        static async Task Awaited(ResourceInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+        {
+            await lastTask;
+ 
+            while (!isCompleted)
+            {
+                await invoker.ResultNext<IAlwaysRunResultFilter, IAsyncAlwaysRunResultFilter>(ref next, ref scope, ref state, ref isCompleted);
+            }
+        }
+    }
+
+    // 与 InvokeAlwaysRunResultFilters 实现相同
+    // 会执行全部结果过滤器
+    private Task InvokeResultFilters()
+    {
+        try
+        {
+            var next = State.ResultBegin;
+            var scope = Scope.Invoker;
+            var state = (object?)null;
+            var isCompleted = false;
+ 
+            while (!isCompleted)
+            {
+                var lastTask = ResultNext<IResultFilter, IAsyncResultFilter>(ref next, ref scope, ref state, ref isCompleted);
+                if (!lastTask.IsCompletedSuccessfully)
+                {
+                    return Awaited(this, lastTask, next, scope, state, isCompleted);
+                }
+            }
+ 
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+ 
+        static async Task Awaited(ResourceInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+        {
+            await lastTask;
+ 
+            while (!isCompleted)
+            {
+                await invoker.ResultNext<IResultFilter, IAsyncResultFilter>(ref next, ref scope, ref state, ref isCompleted);
+            }
+        }
+    }
+
+    // 基于状态机的结果过滤器管线执行方法
+    private Task ResultNext<TFilter, TFilterAsync>(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)
+        where TFilter : class, IResultFilter
+        where TFilterAsync : class, IAsyncResultFilter
+    {
+        var resultFilterKind = typeof(TFilter) == typeof(IAlwaysRunResultFilter) ?
+            FilterTypeConstants.AlwaysRunResultFilter :
+            FilterTypeConstants.ResultFilter;
+ 
+        switch (next)
+        {
+            case State.ResultBegin:
+                {
+                    // 重置过滤器游标
+                    _cursor.Reset();
+                    // 跳转到 State.ResultNext
+                    // 开始结果过滤器管线
+                    goto case State.ResultNext;
+                }
+ 
+            case State.ResultNext:
+                {
+                    // 得到结果过滤器集合并将游标移动到下一个过滤器
+                    var current = _cursor.GetNextFilter<TFilter, TFilterAsync>();
+                    if (current.FilterAsync != null)
+                    {
+                        if (_resultExecutingContext == null)
+                        {
+                            _resultExecutingContext = new ResultExecutingContextSealed(_actionContext, _filters, _result!, _instance!);
+                        }
+ 
+                        state = current.FilterAsync;
+                        // 跳转到 State.ResultAsyncBegin
+                        // 以异步方式执行结果过滤器
+                        goto case State.ResultAsyncBegin;
+                    }
+                    else if (current.Filter != null)
+                    {
+                        if (_resultExecutingContext == null)
+                        {
+                            _resultExecutingContext = new ResultExecutingContextSealed(_actionContext, _filters, _result!, _instance!);
+                        }
+ 
+                        state = current.Filter;
+                        // 跳转到 State.ResultSyncBegin
+                        // 以同步方式执行结果过滤器
+                        goto case State.ResultSyncBegin;
+                    }
+                    else
+                    {
+                        // 跳转到 State.ResultInside
+                        // 结果过滤器流入管线完成
+                        goto case State.ResultInside;
+                    }
+                }
+ 
+            case State.ResultAsyncBegin:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resultExecutingContext != null);
+ 
+                    var filter = (TFilterAsync)state;
+                    var resultExecutingContext = _resultExecutingContext;
+ 
+                    _diagnosticListener.BeforeOnResultExecution(resultExecutingContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        resultFilterKind,
+                        nameof(IAsyncResultFilter.OnResultExecutionAsync),
+                        filter);
+
+                    // 执行 IAsyncResultFilter.OnResultExecutionAsync 方法
+                    // InvokeNextResultFilterAwaitedAsync 方法内部会调用 InvokeNextResultFilterAsync 方法
+                    // 压栈 Scope.Result 管线范围
+                    var task = filter.OnResultExecutionAsync(resultExecutingContext, InvokeNextResultFilterAwaitedAsync<TFilter, TFilterAsync>);
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResultAsyncEnd
+                        next = State.ResultAsyncEnd;
+                        return task;
+                    }
+
+                    // 跳转到 State.ResultAsyncEnd
+                    goto case State.ResultAsyncEnd;
+                }
+ 
+            case State.ResultAsyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resultExecutingContext != null);
+ 
+                    var filter = (TFilterAsync)state;
+                    var resultExecutingContext = _resultExecutingContext;
+                    var resultExecutedContext = _resultExecutedContext;
+ 
+                    if (resultExecutedContext == null || resultExecutingContext.Cancel)
+                    {
+                        _logger.ResultFilterShortCircuited(filter);
+                        // 跳过后续 IResultFilter.OnResultExecuted 方法执行
+                        _resultExecutedContext = new ResultExecutedContextSealed(
+                            _actionContext,
+                            _filters,
+                            resultExecutingContext.Result,
+                            _instance!)
+                        {
+                            Canceled = true,
+                        };
+                    }
+ 
+                    _diagnosticListener.AfterOnResultExecution(_resultExecutedContext!, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        resultFilterKind,
+                        nameof(IAsyncResultFilter.OnResultExecutionAsync),
+                        filter);
+
+                    // 跳转到 State.ResultEnd
+                    goto case State.ResultEnd;
+                }
+ 
+            case State.ResultSyncBegin:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resultExecutingContext != null);
+ 
+                    var filter = (TFilter)state;
+                    var resultExecutingContext = _resultExecutingContext;
+ 
+                    _diagnosticListener.BeforeOnResultExecuting(resultExecutingContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        resultFilterKind,
+                        nameof(IResultFilter.OnResultExecuting),
+                        filter);
+
+                    // 执行 IResultFilter.OnResultExecuting 方法
+                    filter.OnResultExecuting(resultExecutingContext);
+ 
+                    _diagnosticListener.AfterOnResultExecuting(resultExecutingContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        resultFilterKind,
+                        nameof(IResultFilter.OnResultExecuting),
+                        filter);
+
+                    // 跳过堆栈中的后续结果过滤器和 IActionResult 执行
+                    if (_resultExecutingContext.Cancel)
+                    {
+                        _logger.ResultFilterShortCircuited(filter);
+                        
+                        // 跳过后续 IResultFilter.OnResultExecuted 方法执行
+                        _resultExecutedContext = new ResultExecutedContextSealed(
+                            resultExecutingContext,
+                            _filters,
+                            resultExecutingContext.Result,
+                            _instance!)
+                        {
+                            Canceled = true,
+                        };
+ 
+                        goto case State.ResultEnd;
+                    }
+ 
+                    // 压栈 Scope.Result 管线范围
+                    var task = InvokeNextResultFilterAsync<TFilter, TFilterAsync>();
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResultSyncEnd
+                        next = State.ResultSyncEnd;
+                        // 返回管线范围完成情况的 Task
+                        // 用于等待管线范围完成（出栈）
+                        return task;
+                    }
+
+                    // 跳转到 State.ResultSyncEnd
+                    goto case State.ResultSyncEnd;
+                }
+ 
+            case State.ResultSyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_resultExecutingContext != null);
+                    Debug.Assert(_resultExecutedContext != null);
+ 
+                    var filter = (TFilter)state;
+                    var resultExecutedContext = _resultExecutedContext;
+ 
+                    _diagnosticListener.BeforeOnResultExecuted(resultExecutedContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        resultFilterKind,
+                        nameof(IResultFilter.OnResultExecuted),
+                        filter);
+
+                    // 执行 IResultFilter.OnResultExecuted 方法
+                    filter.OnResultExecuted(resultExecutedContext);
+ 
+                    _diagnosticListener.AfterOnResultExecuted(resultExecutedContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        resultFilterKind,
+                        nameof(IResultFilter.OnResultExecuted),
+                        filter);
+
+                    // 跳转到 State.ResultEnd
+                    goto case State.ResultEnd;
+                }
+ 
+            case State.ResultInside:
+                {
+                    if (_resultExecutingContext != null)
+                    {
+                        _result = _resultExecutingContext.Result;
+                    }
+ 
+                    if (_result == null)
+                    {
+                        _result = new EmptyResult();
+                    }
+ 
+                    // 执行 IActionResult
+                    var task = InvokeResultAsync(_result);
+                    // 没有同步完成
+                    if (!task.IsCompletedSuccessfully)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ResultEnd
+                        // 方法出栈，返回异步等待 Task
+                        next = State.ResultEnd;
+                        return task;
+                    }
+ 
+                    goto case State.ResultEnd;
+                }
+ 
+            case State.ResultEnd:
+                {
+                    var result = _result;
+                    // 管线范围完成（出栈）
+                    isCompleted = true;
+ 
+                    if (scope == Scope.Result)
+                    {
+                        if (_resultExecutedContext == null)
+                        {
+                            _resultExecutedContext = new ResultExecutedContextSealed(_actionContext, _filters, result!, _instance!);
+                        }
+ 
+                        return Task.CompletedTask;
+                    }
+ 
+                    Rethrow(_resultExecutedContext!);
+                    return Task.CompletedTask;
+                }
+ 
+            default:
+                throw new InvalidOperationException(); // Unreachable.
+        }
+    }
+
+    // 结果过滤器后续管线入口方法
+    private Task<ResultExecutedContext> InvokeNextResultFilterAwaitedAsync<TFilter, TFilterAsync>()
+        where TFilter : class, IResultFilter
+        where TFilterAsync : class, IAsyncResultFilter
+    {
+        Debug.Assert(_resultExecutingContext != null);
+        if (_resultExecutingContext.Cancel)
+        {
+            return Throw();
+        }
+
+        // 压栈 Scope.Result 管线范围
+        var task = InvokeNextResultFilterAsync<TFilter, TFilterAsync>();
+        // 没有同步完成
+        if (!task.IsCompletedSuccessfully)
+        {
+            // 返回管线范围完成情况的 Task<ResultExecutedContext>
+            // 用于等待管线范围完成（出栈）
+            return Awaited(this, task);
+        }
+ 
+        Debug.Assert(_resultExecutedContext != null);
+        return Task.FromResult<ResultExecutedContext>(_resultExecutedContext);
+ 
+        static async Task<ResultExecutedContext> Awaited(ResourceInvoker invoker, Task task)
+        {
+            await task;
+ 
+            Debug.Assert(invoker._resultExecutedContext != null);
+            return invoker._resultExecutedContext;
+        }
+#pragma warning disable CS1998
+        static async Task<ResultExecutedContext> Throw()
+        {
+            var message = Resources.FormatAsyncResultFilter_InvalidShortCircuit(
+                typeof(IAsyncResultFilter).Name,
+                nameof(ResultExecutingContext.Cancel),
+                typeof(ResultExecutingContext).Name,
+                typeof(ResultExecutionDelegate).Name);
+ 
+            throw new InvalidOperationException(message);
+        }
+#pragma warning restore CS1998
+    }
+
+    // 子类重写该方法
+    // 实现动作过滤器管线的执行
+    protected abstract Task InvokeInnerFilterAsync();
+}
+```
+
+- ControllerActionInvoker
+
+```C#
+// 基于控制器的 IActionInvoker 实现
+internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
+{
+    private readonly ControllerActionInvokerCacheEntry _cacheEntry;
+    private readonly ControllerContext _controllerContext;
+ 
+    private Dictionary<string, object?>? _arguments;
+ 
+    private ActionExecutingContextSealed? _actionExecutingContext;
+    private ActionExecutedContextSealed? _actionExecutedContext;
+ 
+    internal ControllerActionInvoker(
+        ILogger logger,
+        DiagnosticListener diagnosticListener,
+        IActionContextAccessor actionContextAccessor,
+        IActionResultTypeMapper mapper,
+        ControllerContext controllerContext,
+        ControllerActionInvokerCacheEntry cacheEntry,
+        IFilterMetadata[] filters)
+        : base(diagnosticListener, logger, actionContextAccessor, mapper, controllerContext, filters, controllerContext.ValueProviderFactories)
+    {
+        ArgumentNullException.ThrowIfNull(cacheEntry);
+ 
+        _cacheEntry = cacheEntry;
+        _controllerContext = controllerContext;
+    }
+
+    // 动作过滤器管线入口方法
+    // 压栈 Scope.Invoker 管线范围
+    protected override Task InvokeInnerFilterAsync()
+    {
+        try
+        {
+            // 管线范围下一个管线执行状态置为 State.ActionBegin
+            var next = State.ActionBegin;
+            // 创建 Scope.Invoker 管线范围
+            var scope = Scope.Invoker;
+            var state = (object?)null;
+            var isCompleted = false;
+ 
+            while (!isCompleted)
+            {
+                // 利用状态机执行管线的下一个状态
+                var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
+                // 没有同步完成
+                if (!lastTask.IsCompletedSuccessfully)
+                {
+                    // 返回管线范围完成情况的 Task
+                    // 用于等待管线范围完成（出栈）
+                    return Awaited(this, lastTask, next, scope, state, isCompleted);
+                }
+            }
+ 
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+ 
+        static async Task Awaited(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+        {
+            await lastTask;
+ 
+            while (!isCompleted)
+            {
+                await invoker.Next(ref next, ref scope, ref state, ref isCompleted);
+            }
+        }
+    }
+
+    // 基于状态机的动作过滤器管线执行方法
+    private Task Next(ref State next, ref Scope scope, ref object? state, ref bool isCompleted)
+    {
+        switch (next)
+        {
+            case State.ActionBegin:
+                {
+                    var controllerContext = _controllerContext;
+ 
+                    _cursor.Reset();
+                    Log.ExecutingControllerFactory(_logger, controllerContext);
+
+                    // 创建控制器实例
+                    // 默认使用 ActivatorUtilities.CreateInstance 方法创建控制器实例
+                    // 并且控制器构造函数的参数由 ActionContext.HttpContext.RequestServices 属性表示的范围容器提供
+                    // 如果调用 IMvcBuilder.AddControllersAsServices 扩展方法注册了 IControllerActivator 服务
+                    // 则控制器实例直接由 ActionContext.HttpContext.RequestServices 属性表示的范围容器提供
+                    _instance = _cacheEntry.ControllerFactory(controllerContext);
+                    Log.ExecutedControllerFactory(_logger, controllerContext);
+ 
+                    _arguments = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+                    // 参数绑定
+                    var task = BindArgumentsAsync();
+                    // 没有同步完成
+                    if (task.Status != TaskStatus.RanToCompletion)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ActionNext
+                        next = State.ActionNext;
+                        // 方法出栈，返回异步等待 Task
+                        return task;
+                    }
+
+                    // 跳转到 State.ActionNext
+                    goto case State.ActionNext;
+                }
+ 
+            case State.ActionNext:
+                {
+                    // 得到动作过滤器集合并将游标移动到下一个过滤器
+                    var current = _cursor.GetNextFilter<IActionFilter, IAsyncActionFilter>();
+                    if (current.FilterAsync != null)
+                    {
+                        if (_actionExecutingContext == null)
+                        {
+                            _actionExecutingContext = new ActionExecutingContextSealed(_controllerContext, _filters, _arguments!, _instance!);
+                        }
+ 
+                        state = current.FilterAsync;
+                        // 跳转到 State.ActionAsyncBegin
+                        // 以异步方式执行动作过滤器
+                        goto case State.ActionAsyncBegin;
+                    }
+                    else if (current.Filter != null)
+                    {
+                        if (_actionExecutingContext == null)
+                        {
+                            _actionExecutingContext = new ActionExecutingContextSealed(_controllerContext, _filters, _arguments!, _instance!);
+                        }
+ 
+                        state = current.Filter;
+                        // 跳转到 State.ActionSyncBegin
+                        // 以同步方式执行动作过滤器
+                        goto case State.ActionSyncBegin;
+                    }
+                    else
+                    {
+                        // 跳转到 State.ActionInside
+                        // 动作过滤器流入管线完成
+                        goto case State.ActionInside;
+                    }
+                }
+ 
+            case State.ActionAsyncBegin:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_actionExecutingContext != null);
+ 
+                    var filter = (IAsyncActionFilter)state;
+                    var actionExecutingContext = _actionExecutingContext;
+ 
+                    _diagnosticListener.BeforeOnActionExecution(actionExecutingContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        MvcCoreLoggerExtensions.ActionFilter,
+                        nameof(IAsyncActionFilter.OnActionExecutionAsync),
+                        filter);
+
+                    // 执行 IAsyncActionFilter.OnActionExecutionAsync 方法
+                    // 压栈 Scope.Action 管线范围
+                    // InvokeNextActionFilterAwaitedAsync 方法内部会创建 Scope.Action 管线范围
+                    var task = filter.OnActionExecutionAsync(actionExecutingContext, InvokeNextActionFilterAwaitedAsync);
+                    // 没有同步完成
+                    if (task.Status != TaskStatus.RanToCompletion)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ActionAsyncEnd
+                        next = State.ActionAsyncEnd;
+                        // 方法出栈，返回异步等待 Task
+                        return task;
+                    }
+
+                    // 跳转到 State.ActionAsyncEnd
+                    goto case State.ActionAsyncEnd;
+                }
+ 
+            case State.ActionAsyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_actionExecutingContext != null);
+ 
+                    var filter = (IAsyncActionFilter)state;
+ 
+                    if (_actionExecutedContext == null)
+                    {
+                        // If we get here then the filter didn't call 'next' indicating a short circuit.
+                        _logger.ActionFilterShortCircuited(filter);
+ 
+                        _actionExecutedContext = new ActionExecutedContextSealed(
+                            _controllerContext,
+                            _filters,
+                            _instance!)
+                        {
+                            Canceled = true,
+                            Result = _actionExecutingContext.Result,
+                        };
+                    }
+ 
+                    _diagnosticListener.AfterOnActionExecution(_actionExecutedContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        MvcCoreLoggerExtensions.ActionFilter,
+                        nameof(IAsyncActionFilter.OnActionExecutionAsync),
+                        filter);
+
+                    // 跳转到 State.ActionEnd
+                    goto case State.ActionEnd;
+                }
+ 
+            case State.ActionSyncBegin:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_actionExecutingContext != null);
+ 
+                    var filter = (IActionFilter)state;
+                    var actionExecutingContext = _actionExecutingContext;
+ 
+                    _diagnosticListener.BeforeOnActionExecuting(actionExecutingContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        MvcCoreLoggerExtensions.ActionFilter,
+                        nameof(IActionFilter.OnActionExecuting),
+                        filter);
+
+                    // 执行 IActionFilter.OnActionExecuting 方法
+                    filter.OnActionExecuting(actionExecutingContext);
+ 
+                    _diagnosticListener.AfterOnActionExecuting(actionExecutingContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        MvcCoreLoggerExtensions.ActionFilter,
+                        nameof(IActionFilter.OnActionExecuting),
+                        filter);
+                    
+                    // 如果 ActionExecutingContext.Result 属性不为 null
+                    // 则跳过堆栈中的后续动作过滤器和动作方法执行
+                    if (actionExecutingContext.Result != null)
+                    {
+                        _logger.ActionFilterShortCircuited(filter);
+ 
+                        _actionExecutedContext = new ActionExecutedContextSealed(
+                            _actionExecutingContext,
+                            _filters,
+                            _instance!)
+                        {
+                            Canceled = true,
+                            Result = _actionExecutingContext.Result,
+                        };
+
+                        // 跳转到 State.ActionEnd
+                        goto case State.ActionEnd;
+                    }
+
+                    // 压栈 Scope.Action 管线范围
+                    var task = InvokeNextActionFilterAsync();
+                    // 没有同步完成
+                    if (task.Status != TaskStatus.RanToCompletion)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ActionSyncEnd
+                        next = State.ActionSyncEnd;
+                        // 返回管线范围完成情况的 Task
+                        return task;
+                    }
+
+                    // 跳转到 State.ActionSyncEnd
+                    goto case State.ActionSyncEnd;
+                }
+ 
+            case State.ActionSyncEnd:
+                {
+                    Debug.Assert(state != null);
+                    Debug.Assert(_actionExecutingContext != null);
+                    Debug.Assert(_actionExecutedContext != null);
+ 
+                    var filter = (IActionFilter)state;
+                    var actionExecutedContext = _actionExecutedContext;
+ 
+                    _diagnosticListener.BeforeOnActionExecuted(actionExecutedContext, filter);
+                    _logger.BeforeExecutingMethodOnFilter(
+                        MvcCoreLoggerExtensions.ActionFilter,
+                        nameof(IActionFilter.OnActionExecuted),
+                        filter);
+
+                    // 执行 IActionFilter.OnActionExecuted 方法
+                    filter.OnActionExecuted(actionExecutedContext);
+ 
+                    _diagnosticListener.AfterOnActionExecuted(actionExecutedContext, filter);
+                    _logger.AfterExecutingMethodOnFilter(
+                        MvcCoreLoggerExtensions.ActionFilter,
+                        nameof(IActionFilter.OnActionExecuted),
+                        filter);
+
+                    // 跳转到 State.ActionEnd
+                    goto case State.ActionEnd;
+                }
+ 
+            case State.ActionInside:
+                {   
+                    // 执行动作方法
+                    var task = InvokeActionMethodAsync();
+                    // 没有同步完成
+                    if (task.Status != TaskStatus.RanToCompletion)
+                    {
+                        // 当前管道范围下一个管线执行状态置为 State.ActionEnd
+                        next = State.ActionEnd;
+                        // 方法出栈，返回异步等待 Task
+                        return task;
+                    }
+
+                    // 跳转到 State.ActionEnd
+                    goto case State.ActionEnd;
+                }
+ 
+            case State.ActionEnd:
+                {
+                    // 如果当前处于 Scope.Action 管线范围
+                    // 管线范围完成（出栈）
+                    if (scope == Scope.Action)
+                    {
+                        // 没有通过 ActionExecutingContext.Result 属性短路管线
+                        if (_actionExecutedContext == null)
+                        {
+                            _actionExecutedContext = new ActionExecutedContextSealed(_controllerContext, _filters, _instance!)
+                            {
+                                // 将动作方法执行结果赋值给 ActionExecutedContext.Result 属性
+                                Result = _result,
+                            };
+                        }
+ 
+                        isCompleted = true;
+                        return Task.CompletedTask;
+                    }
+ 
+                    var actionExecutedContext = _actionExecutedContext;
+                    Rethrow(actionExecutedContext);
+ 
+                    if (actionExecutedContext != null)
+                    {
+                        _result = actionExecutedContext.Result;
+                    }
+ 
+                    isCompleted = true;
+                    return Task.CompletedTask;
+                }
+ 
+            default:
+                throw new InvalidOperationException();
+        }
+    }
+    
+    // 动作过滤器后续管线入口方法
+    private Task InvokeNextActionFilterAsync()
+    {
+        try
+        {
+            var next = State.ActionNext;
+            var state = (object?)null;
+            // 创建 Scope.Action 管线范围
+            var scope = Scope.Action;
+            var isCompleted = false;
+            while (!isCompleted)
+            {
+                // 基于状态机执行管线的下一个状态
+                var lastTask = Next(ref next, ref scope, ref state, ref isCompleted);
+                // 没有同步完成
+                if (!lastTask.IsCompletedSuccessfully)
+                {
+                    // 返回管线范围完成情况的 Task
+                    return Awaited(this, lastTask, next, scope, state, isCompleted);
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            _actionExecutedContext = new ActionExecutedContextSealed(_controllerContext, _filters, _instance!)
+            {
+                ExceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception),
+            };
+        }
+ 
+        Debug.Assert(_actionExecutedContext != null);
+        return Task.CompletedTask;
+ 
+        static async Task Awaited(ControllerActionInvoker invoker, Task lastTask, State next, Scope scope, object? state, bool isCompleted)
+        {
+            try
+            {
+                await lastTask;
+ 
+                while (!isCompleted)
+                {
+                    await invoker.Next(ref next, ref scope, ref state, ref isCompleted);
+                }
+            }
+            catch (Exception exception)
+            {
+                invoker._actionExecutedContext = new ActionExecutedContextSealed(invoker._controllerContext, invoker._filters, invoker._instance!)
+                {
+                    ExceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception),
+                };
+            }
+ 
+            Debug.Assert(invoker._actionExecutedContext != null);
+        }
+    }
+    
+    // 执行动作方法
+    private Task InvokeActionMethodAsync()
+    {
+        if (_diagnosticListener.IsEnabled() || _logger.IsEnabled(LogLevel.Trace))
+        {
+            return Logged(this);
+        }
+ 
+        var objectMethodExecutor = _cacheEntry.ObjectMethodExecutor;
+        var actionMethodExecutor = _cacheEntry.ActionMethodExecutor;
+        var orderedArguments = PrepareArguments(_arguments, objectMethodExecutor);
+
+        // 无论动作方法的返回值类型是什么
+        // 最终都会被封装为一个 ValueTask<IActionResult> 类型的对象
+        var actionResultValueTask = actionMethodExecutor.Execute(ControllerContext, _mapper, objectMethodExecutor, _instance!, orderedArguments);
+        // 没有同步完成
+        if (actionResultValueTask.IsCompletedSuccessfully)
+        {
+            _result = actionResultValueTask.Result;
+        }
+        else
+        {
+            return Awaited(this, actionResultValueTask);
+        }
+ 
+        return Task.CompletedTask;
+ 
+        static async Task Awaited(ControllerActionInvoker invoker, ValueTask<IActionResult> actionResultValueTask)
+        {
+            // 等待 ValueTask<IActionResult>
+            invoker._result = await actionResultValueTask;
+        }
+    }
+}
+```
