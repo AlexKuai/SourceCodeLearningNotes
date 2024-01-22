@@ -329,6 +329,7 @@ public class ControllerFeatureProvider : IApplicationFeatureProvider<ControllerF
 
 ```C#
 // Action 方法描述符
+// 每个 Action 方法基于特性路由可以对应多个 ActionDescriptor
 public class ActionDescriptor
 {
     public ActionDescriptor()
@@ -972,7 +973,7 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider
  
         // 如果控制器类型自身实现了 IAsyncActionFilter 或 IActionFilter
         // 则利用 ControllerActionFilter 封装自身并作为 IFileterMetadata 添加到 ControllerModel.Filters 集合中
-        // ControllerActionFilter 过滤器会在构建的 Action 方法处理管道执行时利用创建的控制器实例调用对应的方法
+        // ControllerActionFilter 过滤器会在构建的 Action 方法处理管线执行时利用创建的控制器实例调用对应的方法
         if (typeof(IAsyncActionFilter).GetTypeInfo().IsAssignableFrom(typeInfo) ||
             typeof(IActionFilter).GetTypeInfo().IsAssignableFrom(typeInfo))
         {
@@ -980,7 +981,7 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider
         }
         // 如果控制器类型自身实现了 IAsyncResultFilter 或 IResultFilter
         // 则利用 ControllerActionFilter 封装自身并作为 IFileterMetadata 添加到 ControllerModel.Filters 集合中
-        // ControllerResultFilter 过滤器会在构建的 Action 处理管道执行时利用创建的控制器实例调用对应的方法
+        // ControllerResultFilter 过滤器会在构建的 Action 处理管线执行时利用创建的控制器实例调用对应的方法
         if (typeof(IAsyncResultFilter).GetTypeInfo().IsAssignableFrom(typeInfo) ||
             typeof(IResultFilter).GetTypeInfo().IsAssignableFrom(typeInfo))
         {
@@ -1132,6 +1133,9 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider
 
     // 创建 SelectorModel
     // 每个实现了 IRouteTemplateProvider 的特性都会创建一个 SelectorModel
+    // 注意：
+    // 如果实现了 IRouteTemplateProvider 的特性又实现了 IActionHttpMethodProvider
+    // 则传入的特性集合中会忽略掉其他实现了 IActionHttpMethodProvider 的特性
     private static SelectorModel CreateSelectorModel(IRouteTemplateProvider? route, IList<object> attributes)
     {
         var selectorModel = new SelectorModel();
@@ -1142,7 +1146,7 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider
  
         // 从特性集合中将实现了 IActionConstraintMetadata 的特性添加到 SelectorModel.ActionConstraints 表示的 Action 约束集合中
         AddRange(selectorModel.ActionConstraints, attributes.OfType<IActionConstraintMetadata>());
-        // 特性集合添加到 SelectorModel.EndpointMetadata 表示的元数据集合中
+        // 将特性集合添加到 SelectorModel.EndpointMetadata 表示的元数据集合中
         AddRange(selectorModel.EndpointMetadata, attributes);
  
         // 检查是否存在实现了 IActionHttpMethodProvider 的特性
@@ -1167,7 +1171,7 @@ internal class DefaultApplicationModelProvider : IApplicationModelProvider
 
 ```C#
 // 针对 ApiBehavior 的 ApplicationModel 提供器
-// 针对绑定了 ApiControllerAttribute 特性的控制器类型
+// 针对绑定了 ApiControllerAttribute 特性的控制器
 // 注意：
 // 标记了 ApiControllerAttribute 特性的控制器的所有 Action 方法必须使用特性路由
 // 即在类型或方法上绑定实现了 IRouteTemplateProvider 的特性
@@ -1231,7 +1235,7 @@ internal sealed class ApiBehaviorApplicationModelProvider : IApplicationModelPro
         // 遍历 ApplicationModel.Controllers 集合
         foreach (var controller in context.Result.Controllers)
         {
-            // 不是 ApiControllerAttribute 标记的控制器则跳过
+            // 跳过没有绑定 ApiControllerAttribute 特性的控制器
             if (!IsApiController(controller))
             {
                 continue;
@@ -1244,6 +1248,7 @@ internal sealed class ApiBehaviorApplicationModelProvider : IApplicationModelPro
 
                 // 遍历 IActionModelConventions 集合
                 // 应用配置配置 ActionModel
+                // 主要作用是添加一些特定的过滤器
                 foreach (var convention in ActionModelConventions)
                 {
                     convention.Apply(action);
@@ -1404,7 +1409,7 @@ public abstract class ActionDescriptorCollectionProvider : IActionDescriptorColl
 {
     public abstract ActionDescriptorCollection ActionDescriptors { get; }
  
-    // 返回变动令牌，用于注册回调，在发生变动时触发
+    // 返回变动令牌，用于注册回调，在 ActionDescriptor 集合发生变动时触发
     public abstract IChangeToken GetChangeToken();
 }
 ```
@@ -2046,10 +2051,10 @@ internal sealed class ActionEndpointFactory
             }
         }
  
-        // 将 ActionDescriptor 添加到 EndpointBuilder 元数据集合中
+        // 将 ActionDescriptor 添加到 EndpointBuilder 的元数据集合中
         builder.Metadata.Add(action);
 
-        // 将路由名称添加到 EndpointBuilder 的元数据集合中
+        // 将终结点名称添加到 EndpointBuilder 的元数据集合中
         if (routeName != null &&
             !suppressLinkGeneration &&
             routeNames.Add(routeName) &&
@@ -2062,7 +2067,8 @@ internal sealed class ActionEndpointFactory
         {
             builder.Metadata.Add(new DataTokensMetadata(dataTokens));
         }
- 
+
+        // 将路由名称添加到 EndpointBuilder 的元数据集合中
         builder.Metadata.Add(new RouteNameMetadata(routeName));
  
         // 将 ActionDescriptor.FilterDescriptors 中的 IFilterMetadata 过滤器添加到 EndpointBuilder 的元数据集合中
