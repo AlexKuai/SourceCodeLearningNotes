@@ -2497,6 +2497,43 @@ internal abstract partial class ResourceInvoker
         _cursor = new FilterCursor(filters);
     }
 
+    // 完整管线
+    // 管线流入方向：授权过滤器 -> 资源过滤器（流入）-> 参数绑定 -> 动作过滤器（流入）-> 动作方法 
+    // 管线流出方向：动作过滤器（流出）-> 异常过滤器 -> 结果过滤器（流入）-> 结果执行 -> 结果过滤器（流出）-> 资源过滤器（流出）
+
+    // 不同过滤器短路管线
+
+    // 授权过滤器短路管线
+    // 同步：设置 AuthorizationFilterContext.Result 属性
+    // 异步：设置 AuthorizationFilterContext.Result 属性
+    // 管线流入方向：授权过滤器
+    // 管线流出方向：始终运行结果过滤器（流入）-> 结果执行 -> 始终运行结果过滤器（流出）
+
+    // 资源过滤器短路管线
+    // 同步：设置 ResourceExecutingContext.Result 属性
+    // 异步：设置 ResourceExecutingContext.Result 属性外还需要跳过 ResourceExecutionDelegate 的执行，否则会抛出异常
+    // 管线流入方向：授权过滤器 -> 已执行的资源过滤器（流入）
+    // 管线流出方向：始终运行结果过滤器（流入）-> 结果执行 -> 始终运行结果过滤器（流出）-> 已执行的资源过滤器（流出）
+
+    // 动作过滤器短路管线（通过设置 ActionExecutingContext.Result 属性）
+    // 同步：设置 ActionExecutingContext.Result 属性
+    // 异步：设置 ActionExecutingContext.Result 属性外还需要跳过 ActionExecutionDelegate 的执行，否则会抛出异常
+    // 管线流入方向：授权过滤器 -> 资源过滤器（流入）-> 参数绑定 -> 已执行的动作过滤器（流入）
+    // 管线流出方向：已执行的动作过滤器（流出）-> 异常过滤器 -> 结果过滤器（流入）-> 结果执行 -> 结果过滤器（流出）-> 资源过滤器（流出）
+
+    // 异常过滤器短路管线
+    // 同步：通过设置 ExceptionContext.Exception 属性为 null 或 ExceptionContext.IsHandled 属性为 true
+    // 异步：通过设置 ExceptionContext.Exception 属性为 null 或 ExceptionContext.IsHandled 属性为 true
+    // 实际上异常过滤器不存在短管线，因为压栈的 Scope.Exception 管线范围内的异常过滤器会逐一检查跳过执行
+    // 管线流入方向：授权过滤器 -> 资源过滤器（流入）-> | 参数绑定 -> 动作过滤器（流入）
+    // 管线流出方向：动作过滤器（流出）| -> 异常过滤器 -> 始终运行结果过滤器（流入）-> 结果执行 -> 始终运行结果过滤器（流出）-> 资源过滤器（流出）
+
+    // 结果过滤器短路管线
+    // 同步：设置 ResultExecutingContext.Cancel 属性为 true
+    // 异步：设置 ResultExecutingContext.Cancel 属性为 true 或跳过 ResultExecutionDelegate 的执行
+    // 管线流入方向：授权过滤器 -> 资源过滤器（流入）-> 参数绑定 -> 动作过滤器（流入）-> 动作方法 
+    // 管线流出方向：动作过滤器（流出）-> 异常过滤器 -> 已执行的结果过滤器（流入）-> 已执行的结果过滤器（流出）-> 资源过滤器（流出）
+
     // 管线入口方法
     public virtual Task InvokeAsync()
     {
