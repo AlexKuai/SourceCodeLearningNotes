@@ -2,14 +2,15 @@
 
 ## 源码涉及的核心类型
 
-- ApplicationPartManager  
-- ApplicationPartFactory  
-- DefaultApplicationPartFactory  
+- ApplicationPart  
 - IApplicationPartTypeProvider  
 - AssemblyPart  
 - IApplicationFeatureProvider\<TFeature\>  
 - ControllerFeature  
 - ControllerFeatureProvider  
+- ApplicationPartManager  
+- ApplicationPartFactory  
+- DefaultApplicationPartFactory  
 - ActionDescriptor  
 - ControllerActionDescriptor  
 - ActionDescriptorProviderContext  
@@ -36,6 +37,8 @@
 - ActionEndpointFactory  
 - ControllerEndpointRouteBuilderExtensions  
 - ControllerActionEndpointDataSourceFactory  
+- ActionContext  
+- ControllerContext  
 - IRequestDelegateFactory  
 - ControllerRequestDelegateFactory  
 - IActionInvoker  
@@ -54,6 +57,145 @@
 - ModelStateInvalidFilter  
 
 ## MVC 应用模型
+
+- ApplicationPart
+
+```C#
+// 应用部分
+public abstract class ApplicationPart
+{
+    public abstract string Name { get; }
+}
+```
+
+- IApplicationPartTypeProvider
+
+```C#
+// 类型提供器接口
+public interface IApplicationPartTypeProvider
+{
+    // 返回 TypeInfo 集合
+    IEnumerable<TypeInfo> Types { get; }
+}
+```
+
+- AssemblyPart
+
+```C#
+// 表示应用的程序集组成部分
+public class AssemblyPart : ApplicationPart, IApplicationPartTypeProvider
+{
+    public AssemblyPart(Assembly assembly)
+    {
+        Assembly = assembly ?? throw new ArgumentNullException(nameof(assembly));
+    }
+ 
+    public Assembly Assembly { get; }
+ 
+    public override string Name => Assembly.GetName().Name!;
+ 
+    // 返回程序集中定义的类型
+    public IEnumerable<TypeInfo> Types => Assembly.DefinedTypes;
+}
+```
+
+- IApplicationFeatureProvider\<TFeature\>
+
+```C#
+// 应用特性接口
+// 实现的 IApplicationFeatureProvider 是一个空的标记接口
+public interface IApplicationFeatureProvider<TFeature> : IApplicationFeatureProvider
+{
+    // 利用 ApplicationPart 集合填充 TFeature 特性
+    void PopulateFeature(IEnumerable<ApplicationPart> parts, TFeature feature);
+}
+```
+
+- ControllerFeature
+
+```C#
+// 控制器特性
+public class ControllerFeature
+{
+    // 控制器类型集合
+    // 用于保存应用内所有满足控制器要求的类型
+    public IList<TypeInfo> Controllers { get; } = new List<TypeInfo>();
+}
+```
+
+- ControllerFeatureProvider
+
+```C#
+// 控制器特性提供器，用于提供 ControllerFeature 特性
+// 将应用内所有满足控制器要求的类型添加到 ControllerFeature.Controllers 属性表示的控制器类型集合中
+public class ControllerFeatureProvider : IApplicationFeatureProvider<ControllerFeature>
+{
+    // 表示控制器类型的名称后缀
+    private const string ControllerTypeNameSuffix = "Controller";
+ 
+    // 返回实现 IApplicationPartTypeProvider 的 ApplicationPart 集合
+    // 将满足控制器类型要求的 TypeInfo 添加到 ControllerFeature.Controllers 集合中
+    public void PopulateFeature(
+        IEnumerable<ApplicationPart> parts,
+        ControllerFeature feature)
+    {
+        // 筛选出实现 IApplicationPartTypeProvider 的 ApplicationPart 集合
+        foreach (var part in parts.OfType<IApplicationPartTypeProvider>())
+        {
+            foreach (var type in part.Types)
+            {
+                if (IsController(type) && !feature.Controllers.Contains(type))
+                {
+                    feature.Controllers.Add(type);
+                }
+            }
+        }
+    }
+ 
+    // 控制器类型必须通知满足以下条件
+    // 1. 是类
+    // 2. 不是抽象类
+    // 3. 公开的
+    // 4. 不是泛型类
+    // 5. 类型上没有绑定 NonControllerAttribute 特性
+    // 6. 类型上绑定 ApiControllerAttribute 特性（继承 ControllerAttribute）或以 "Controller" 名称后缀结尾（忽略大小写）
+    protected virtual bool IsController(TypeInfo typeInfo)
+    {
+        if (!typeInfo.IsClass)
+        {
+            return false;
+        }
+ 
+        if (typeInfo.IsAbstract)
+        {
+            return false;
+        }
+ 
+        if (!typeInfo.IsPublic)
+        {
+            return false;
+        }
+ 
+        if (typeInfo.ContainsGenericParameters)
+        {
+            return false;
+        }
+ 
+        if (typeInfo.IsDefined(typeof(NonControllerAttribute)))
+        {
+            return false;
+        }
+ 
+        if (!typeInfo.Name.EndsWith(ControllerTypeNameSuffix, StringComparison.OrdinalIgnoreCase) &&
+            !typeInfo.IsDefined(typeof(ControllerAttribute)))
+        {
+            return false;
+        }
+ 
+        return true;
+    }
+}
+```
 
 - ApplicationPartManager
 
@@ -192,135 +334,6 @@ public class DefaultApplicationPartFactory : ApplicationPartFactory
     public override IEnumerable<ApplicationPart> GetApplicationParts(Assembly assembly)
     {
         return GetDefaultApplicationParts(assembly);
-    }
-}
-```
-
-- IApplicationPartTypeProvider
-
-```C#
-// 应用部分的类型提供器接口
-public interface IApplicationPartTypeProvider
-{
-    // 返回 TypeInfo 集合
-    IEnumerable<TypeInfo> Types { get; }
-}
-```
-
-- AssemblyPart
-
-```C#
-// 表示应用的程序集组成部分
-public class AssemblyPart : ApplicationPart, IApplicationPartTypeProvider
-{
-    public AssemblyPart(Assembly assembly)
-    {
-        Assembly = assembly ?? throw new ArgumentNullException(nameof(assembly));
-    }
- 
-    public Assembly Assembly { get; }
- 
-    public override string Name => Assembly.GetName().Name!;
- 
-    // 返回程序集中定义的类型
-    public IEnumerable<TypeInfo> Types => Assembly.DefinedTypes;
-}
-```
-
-- IApplicationFeatureProvider\<TFeature\>
-
-```C#
-// 应用特性接口
-// 实现的 IApplicationFeatureProvider 是一个空的标记接口
-public interface IApplicationFeatureProvider<TFeature> : IApplicationFeatureProvider
-{
-    // 利用 ApplicationPart 集合填充 TFeature 特性
-    void PopulateFeature(IEnumerable<ApplicationPart> parts, TFeature feature);
-}
-```
-
-- ControllerFeature
-
-```C#
-// 控制器特性
-public class ControllerFeature
-{
-    // 控制器类型集合
-    // 用于保存应用内所有满足控制器要求的类型
-    public IList<TypeInfo> Controllers { get; } = new List<TypeInfo>();
-}
-```
-
-- ControllerFeatureProvider
-
-```C#
-// 控制器特性提供器，用于提供 ControllerFeature 特性
-// 将应用内所有满足控制器要求的类型添加到 ControllerFeature.Controllers 属性表示的控制器类型集合中
-public class ControllerFeatureProvider : IApplicationFeatureProvider<ControllerFeature>
-{
-    // 表示控制器类型的名称后缀
-    private const string ControllerTypeNameSuffix = "Controller";
- 
-    // 返回实现 IApplicationPartTypeProvider 的 ApplicationPart 集合
-    // 将满足控制器类型要求的 TypeInfo 添加到 ControllerFeature.Controllers 集合中
-    public void PopulateFeature(
-        IEnumerable<ApplicationPart> parts,
-        ControllerFeature feature)
-    {
-        // 筛选出实现 IApplicationPartTypeProvider 的 ApplicationPart 集合
-        foreach (var part in parts.OfType<IApplicationPartTypeProvider>())
-        {
-            foreach (var type in part.Types)
-            {
-                if (IsController(type) && !feature.Controllers.Contains(type))
-                {
-                    feature.Controllers.Add(type);
-                }
-            }
-        }
-    }
- 
-    // 控制器类型必须通知满足以下条件
-    // 1. 是类
-    // 2. 不是抽象类
-    // 3. 公开的
-    // 4. 不是泛型类
-    // 5. 类型上没有绑定 NonControllerAttribute 特性
-    // 6. 类型上绑定 ApiControllerAttribute 特性（继承 ControllerAttribute）或以 "Controller" 名称后缀结尾（忽略大小写）
-    protected virtual bool IsController(TypeInfo typeInfo)
-    {
-        if (!typeInfo.IsClass)
-        {
-            return false;
-        }
- 
-        if (typeInfo.IsAbstract)
-        {
-            return false;
-        }
- 
-        if (!typeInfo.IsPublic)
-        {
-            return false;
-        }
- 
-        if (typeInfo.ContainsGenericParameters)
-        {
-            return false;
-        }
- 
-        if (typeInfo.IsDefined(typeof(NonControllerAttribute)))
-        {
-            return false;
-        }
- 
-        if (!typeInfo.Name.EndsWith(ControllerTypeNameSuffix, StringComparison.OrdinalIgnoreCase) &&
-            !typeInfo.IsDefined(typeof(ControllerAttribute)))
-        {
-            return false;
-        }
- 
-        return true;
     }
 }
 ```
@@ -2322,7 +2335,124 @@ internal sealed class ControllerActionEndpointDataSourceFactory
 }
 ```
 
-## Action 方法管线构建
+## Action 管线构建
+
+- ActionContext
+
+```C#
+// Action 上下文
+// 本质是对 HttpContxt、ActionDescriptor、RouteData、ModelStateDictionary 的封装
+public class ActionContext
+{
+    public ActionContext()
+    {
+        ModelState = new ModelStateDictionary();
+    }
+ 
+    public ActionContext(ActionContext actionContext)
+        : this(
+            actionContext.HttpContext,
+            actionContext.RouteData,
+            actionContext.ActionDescriptor,
+            actionContext.ModelState)
+    {
+    }
+ 
+    public ActionContext(
+        HttpContext httpContext,
+        RouteData routeData,
+        ActionDescriptor actionDescriptor)
+        : this(httpContext, routeData, actionDescriptor, new ModelStateDictionary())
+    {
+    }
+ 
+    public ActionContext(
+        HttpContext httpContext,
+        RouteData routeData,
+        ActionDescriptor actionDescriptor,
+        ModelStateDictionary modelState)
+    {
+        ArgumentNullException.ThrowIfNull(httpContext);
+        ArgumentNullException.ThrowIfNull(routeData);
+        ArgumentNullException.ThrowIfNull(actionDescriptor);
+        ArgumentNullException.ThrowIfNull(modelState);
+ 
+        HttpContext = httpContext;
+        RouteData = routeData;
+        ActionDescriptor = actionDescriptor;
+        ModelState = modelState;
+    }
+ 
+    public ActionDescriptor ActionDescriptor { get; set; } = default!;
+ 
+    public HttpContext HttpContext { get; set; } = default!;
+ 
+    public ModelStateDictionary ModelState { get; } = default!;
+ 
+    public RouteData RouteData { get; set; } = default!;
+}
+```
+
+- ControllerContext
+
+```C#
+// 基于控制器的 Action 上下文
+// 保存的 ActionContext 实际类型是 ControllerActionDescriptor
+public class ControllerContext : ActionContext
+{
+    private IList<IValueProviderFactory>? _valueProviderFactories;
+ 
+    public ControllerContext()
+    {
+    }
+ 
+    public ControllerContext(ActionContext context)
+        : base(context)
+    {
+        if (context.ActionDescriptor is not ControllerActionDescriptor)
+        {
+            throw new ArgumentException(Resources.FormatActionDescriptorMustBeBasedOnControllerAction(
+                typeof(ControllerActionDescriptor)),
+                nameof(context));
+        }
+    }
+ 
+    internal ControllerContext(
+        HttpContext httpContext,
+        RouteData routeData,
+        ControllerActionDescriptor actionDescriptor)
+        : base(httpContext, routeData, actionDescriptor)
+    {
+    }
+    
+    public new ControllerActionDescriptor ActionDescriptor
+    {
+        get { return (ControllerActionDescriptor)base.ActionDescriptor; }
+        set { base.ActionDescriptor = value; }
+    }
+ 
+    public virtual IList<IValueProviderFactory> ValueProviderFactories
+    {
+        get
+        {
+            if (_valueProviderFactories == null)
+            {
+                _valueProviderFactories = new List<IValueProviderFactory>();
+            }
+ 
+            return _valueProviderFactories;
+        }
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+ 
+            _valueProviderFactories = value;
+        }
+    }
+ 
+    private string DebuggerToString() => ActionDescriptor?.DisplayName ?? $"{{{GetType().FullName}}}";
+}
+```
 
 - IRequestDelegateFactory
 
@@ -3663,6 +3793,8 @@ internal abstract partial class ResourceInvoker
                     {
                         if (_resultExecutingContext == null)
                         {
+                            // 创建 ResultExecutingContext 上下文
+                            // 并封装全局 IActionResult 执行结果
                             _resultExecutingContext = new ResultExecutingContextSealed(_actionContext, _filters, _result!, _instance!);
                         }
  
@@ -3675,6 +3807,8 @@ internal abstract partial class ResourceInvoker
                     {
                         if (_resultExecutingContext == null)
                         {
+                            // 创建 ResultExecutingContext 上下文
+                            // 并封装全局 IActionResult 执行结果
                             _resultExecutingContext = new ResultExecutingContextSealed(_actionContext, _filters, _result!, _instance!);
                         }
  
@@ -3841,13 +3975,13 @@ internal abstract partial class ResourceInvoker
  
             case State.ResultInside:
                 {
-                    // ResultExecutingContext.Result 属性不为 null
-                    // 则覆盖执行动作方法得到的 IActionResult
+                    // 尝试从 ResultExecutingContext 中得到 IActionResult 执行结果
                     if (_resultExecutingContext != null)
                     {
                         _result = _resultExecutingContext.Result;
                     }
- 
+
+                    // 如果执行结果为 null，创建一个 EmptyResult
                     if (_result == null)
                     {
                         _result = new EmptyResult();
