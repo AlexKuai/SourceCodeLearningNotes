@@ -116,6 +116,10 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
         addresses.Add(url);
     }
 
+    // 注意：
+    // 由于 WebApplication 显示实现了（除 Use 方法外）的所有 IApplicationBuilder 接口成员
+    // 所以在程序集外部不能直接通过 WebApplication 调用对应的实现方法（除 Use 方法外）
+
     // 返回 ApplicationBuilder.Properties 表示的共享字典
     internal IDictionary<string, object?> Properties => ApplicationBuilder.Properties;
     // 显式实现 IApplicationBuilder
@@ -158,6 +162,10 @@ public sealed class WebApplication : IHost, IApplicationBuilder, IEndpointRouteB
         ApplicationBuilder.Use(middleware);
         return this;
     }
+
+    // 注意：
+    // 由于 WebApplication 显示实现了所有 IEndpointRouteBuilder 接口成员
+    // 所以在程序集外部不能直接通过 WebApplication 调用对应的实现方法
     
     // 显式实现 IEndpointRouteBuilder
     IApplicationBuilder IEndpointRouteBuilder.CreateApplicationBuilder() => ((IApplicationBuilder)this).New();
