@@ -5,7 +5,7 @@
 - ApplicationPart  
 - IApplicationPartTypeProvider  
 - AssemblyPart  
-- IApplicationFeatureProvider\<TFeature\>  
+- IApplicationFeatureProvider\<\>  
 - ControllerFeature  
 - ControllerFeatureProvider  
 - ApplicationPartManager  
@@ -99,7 +99,7 @@ public class AssemblyPart : ApplicationPart, IApplicationPartTypeProvider
 }
 ```
 
-- IApplicationFeatureProvider\<TFeature\>
+- IApplicationFeatureProvider\<\>
 
 ```C#
 // 应用特性接口
