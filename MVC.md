@@ -4497,13 +4497,14 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
         // 无论动作方法的返回值类型是什么
         // 最终都会被封装为一个 ValueTask<IActionResult> 类型的对象
         var actionResultValueTask = actionMethodExecutor.Execute(ControllerContext, _mapper, objectMethodExecutor, _instance!, orderedArguments);
-        // 没有同步完成
         if (actionResultValueTask.IsCompletedSuccessfully)
         {
+            // 同步完成
             _result = actionResultValueTask.Result;
         }
         else
         {
+            // 没有同步完成
             return Awaited(this, actionResultValueTask);
         }
  
