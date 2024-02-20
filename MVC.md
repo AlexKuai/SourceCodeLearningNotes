@@ -4500,11 +4500,14 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
         if (actionResultValueTask.IsCompletedSuccessfully)
         {
             // 同步完成
+            // 直接返回 IActionResult
             _result = actionResultValueTask.Result;
         }
         else
         {
             // 没有同步完成
+            // 返回管线范围完成情况的 Task
+            // 用于等待管线范围完成（出栈）
             return Awaited(this, actionResultValueTask);
         }
  
@@ -4512,7 +4515,7 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
  
         static async Task Awaited(ControllerActionInvoker invoker, ValueTask<IActionResult> actionResultValueTask)
         {
-            // 等待 ValueTask<IActionResult>
+            // 等待 ValueTask<IActionResult> 完成
             invoker._result = await actionResultValueTask;
         }
     }
