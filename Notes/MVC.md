@@ -187,7 +187,7 @@ public void PopulateFeature<TFeature>(TFeature feature)
 
 ```mermaid
 flowchart TD
-    Asm[一个程序集] --> Check{有 [ProvideApplicationPartFactory] 特性?}
+    Asm[一个程序集] --> Check{"有 [ProvideApplicationPartFactory] 特性?"}
     Check -->|无| Default[DefaultApplicationPartFactory.Instance]
     Check -->|有| Refl[反射创建特性指定的 Factory]
 
@@ -203,17 +203,17 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Type[每个候选 TypeInfo] --> C1{IsClass?}
+    Type[每个候选 TypeInfo] --> C1{"IsClass?"}
     C1 -->|否| No[不是控制器]
-    C1 -->|是| C2{!IsAbstract?}
+    C1 -->|是| C2{"!IsAbstract?"}
     C2 -->|否| No
-    C2 -->|是| C3{IsPublic?}
+    C2 -->|是| C3{"IsPublic?"}
     C3 -->|否| No
-    C3 -->|是| C4{!ContainsGenericParameters?}
+    C3 -->|是| C4{"!ContainsGenericParameters?"}
     C4 -->|否| No
-    C4 -->|是| C5{没有 [NonController]?}
+    C4 -->|是| C5{"没有 [NonController]?"}
     C5 -->|否| No
-    C5 -->|是| C6{以 'Controller' 结尾 或<br/>有 [Controller] 特性?}
+    C5 -->|是| C6{"以 'Controller' 结尾 或 有 [Controller] 特性?"}
     C6 -->|否| No
     C6 -->|是| Yes[判定为控制器 → 加入 Controllers]
 ```
@@ -294,11 +294,11 @@ public class ProductsController : ControllerBase
 ```mermaid
 flowchart TD
     Attr["扫描 Controller/Action 上的特性"]
-    Attr --> Filter{实现 IRouteTemplateProvider?}
+    Attr --> Filter{"实现 IRouteTemplateProvider?"}
     Filter -->|是| RT["创建 SelectorModel + AttributeRouteModel<br/>(每个特性 1 个 SelectorModel)"]
-    Filter -->|否| Constraint{实现 IActionConstraintMetadata?}
+    Filter -->|否| Constraint{"实现 IActionConstraintMetadata?"}
     Constraint -->|是| Constr[加入现有 Selector.ActionConstraints]
-    Constraint -->|否| Meta{是元数据?}
+    Constraint -->|否| Meta{"是元数据?"}
     Meta -->|是| EM[加入 Selector.EndpointMetadata]
 
     RT --> Selectors[控制器/方法的 Selectors 列表]
@@ -381,7 +381,7 @@ services.AddControllers(opt => opt.Conventions.Add(new GlobalRoutePrefixConventi
 flowchart TD
     Start["ApiBehaviorApplicationModelProvider.OnProvidersExecuting"]
     Start --> Loop[遍历 ControllerModel]
-    Loop --> Check{有 [ApiController]<br/>或基类有?}
+    Loop --> Check{"有 [ApiController] 或基类有?"}
     Check -->|否| Skip
     Check -->|是| Apply[应用 API 行为]
 
@@ -682,7 +682,7 @@ flowchart TD
     Factory --> Probe["DI 解析所有 IRequestDelegateFactory"]
     Probe --> Loop[遍历每个 Factory]
     Loop --> Try["factory.CreateRequestDelegate(actionDescriptor)"]
-    Try --> Check{返回非 null?}
+    Try --> Check{"返回非 null?"}
     Check -->|是| Use[使用该 RequestDelegate]
     Check -->|否| Loop
 ```
@@ -993,8 +993,8 @@ public void OnResultExecuting(ResultExecutingContext context)
 ```mermaid
 flowchart TD
     Action[Action Filter 流入]
-    Action --> Check{ModelState.IsValid?}
-    Check -->|否| Return[设置 context.Result = BadRequestObjectResult<br/>(短路)]
+    Action --> Check{"ModelState.IsValid?"}
+    Check -->|否| Return["设置 context.Result = BadRequestObjectResult<br/>(短路)"]
     Check -->|是| Continue[继续 Action 执行]
 
     Return --> Result[Result Filter 接管<br/>+ ClientErrorResultFilter 把 400 转 ProblemDetails]
@@ -1035,8 +1035,8 @@ flowchart LR
 ```mermaid
 flowchart LR
     P1[Provider 1<br/>Order=-1000] --> P2[Provider 2<br/>Order=-900] --> P3[Provider 3<br/>Order=100]
-    P3 --> ExeMethod[OnProvidersExecuting<br/>(升序)]
-    ExeMethod --> P3R[OnProvidersExecuted<br/>(降序)]
+    P3 --> ExeMethod["OnProvidersExecuting<br/>(升序)"]
+    ExeMethod --> P3R["OnProvidersExecuted<br/>(降序)"]
     P3R --> P2R[Provider 2 Executed]
     P2R --> P1R[Provider 1 Executed]
 ```
@@ -1091,7 +1091,7 @@ flowchart LR
     Filter[IFilterMetadata 抽象基类] --> Direct[直接是过滤器实例]
     Filter --> Factory["还可以是 IFilterFactory<br/>(延迟实例化)"]
 
-    Factory --> Reuse{IsReusable?}
+    Factory --> Reuse{"IsReusable?"}
     Reuse -->|是| Cache[首次创建后缓存]
     Reuse -->|否| Always[每次新建]
 ```
