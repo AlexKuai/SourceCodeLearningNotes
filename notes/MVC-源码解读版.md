@@ -52,6 +52,8 @@ flowchart LR
 - **第 15 章**：`IFilterMetadata`、`IOrderedFilter`、`IFilterFactory`、`TypeFilterAttribute`
 - **第 16 章**：`ClientErrorResultFilterFactory`、`ClientErrorResultFilter`、`ModelStateInvalidFilterFactory`、`ModelStateInvalidFilter`
 
+<a id="review-chapter-1"></a>
+
 ## 1. 应用组成部分：从程序集到可发现类型
 
 ### 本组解决什么问题
@@ -176,6 +178,8 @@ public class AssemblyPart : ApplicationPart, IApplicationPartTypeProvider
 
 - ApplicationPart 是 MVC 的模块边界，不等同于 Assembly。
 - AssemblyPart 只暴露类型，不负责判断控制器。
+
+<a id="review-chapter-2"></a>
 
 ## 2. 控制器发现：Feature Provider 如何筛选候选类型
 
@@ -450,6 +454,8 @@ public class ApplicationPartManager
 - ControllerFeature 是发现结果，不是运行时控制器集合。
 - 发现规则集中在 ControllerFeatureProvider.IsController。
 
+<a id="review-chapter-3"></a>
+
 ## 3. Part 工厂：程序集如何自定义 MVC 暴露面
 
 ### 本组解决什么问题
@@ -585,6 +591,8 @@ Razor 或其他扩展可以返回不同种类的 `ApplicationPart`，再配套�
 
 - 默认工厂一对一包装程序集。
 - 自定义工厂改变 Part 形态，不改变 Feature Provider 协议。
+
+<a id="review-chapter-4"></a>
 
 ## 4. Action 描述符：从发现结果到运行时元数据
 
@@ -907,6 +915,8 @@ internal sealed class ControllerActionDescriptorProvider : IActionDescriptorProv
 - Descriptor 是路由与执行共享的稳定元数据。
 - Provider 的 Executed 阶段适合处理全量结果。
 
+<a id="review-chapter-5"></a>
+
 ## 5. 应用模型树：Controller、Action 与 Selector
 
 ### 本组解决什么问题
@@ -1216,6 +1226,8 @@ public class SelectorModel
 
 - ApplicationModel 是启动期可变中间表示。
 - Selector 数量会影响最终描述符与端点数量。
+
+<a id="review-chapter-6"></a>
 
 ## 6. 模型提供器与约定：反射信息如何被加工
 
@@ -2064,6 +2076,8 @@ internal sealed class ApplicationModelFactory
 - Provider 建模型，Convention 改模型。
 - ApiController 的许多行为在请求到来前已经写进模型。
 
+<a id="review-chapter-7"></a>
+
 ## 7. 描述符快照：缓存、版本与变化通知
 
 ### 本组解决什么问题
@@ -2388,6 +2402,8 @@ internal sealed partial class DefaultActionDescriptorCollectionProvider : Action
 
 - 描述符缓存是全量快照，不是逐 Action 缓存。
 - ChangeToken 通知变化，Version 标识结果代次。
+
+<a id="review-chapter-8"></a>
 
 ## 8. 控制器 EndpointDataSource：描述符如何变成端点集合
 
@@ -2773,6 +2789,8 @@ internal sealed class ControllerActionEndpointDataSource : ActionEndpointDataSou
 
 - DataSource 是描述符到端点的动态投影。
 - 属性路由和传统路由共用同一 ActionEndpointFactory。
+
+<a id="review-chapter-9"></a>
 
 ## 9. ActionEndpointFactory：路由模式与元数据合成
 
@@ -3165,6 +3183,8 @@ internal sealed class ActionEndpointFactory
 - RoutePattern 合成同时服务匹配与链接生成。
 - FinallyConvention 是端点构建的最后改写机会。
 
+<a id="review-chapter-10"></a>
+
 ## 10. MapControllers 与 MapControllerRoute：注册入口
 
 ### 本组解决什么问题
@@ -3367,6 +3387,8 @@ internal sealed class ControllerActionEndpointDataSourceFactory
 - MapXxx 记录路由意图，不创建控制器实例。
 - ConventionBuilder 允许注册后继续修改将来的端点。
 
+<a id="review-chapter-11"></a>
+
 ## 11. 从 Endpoint 到 IActionInvoker：请求执行入口
 
 ### 本组解决什么问题
@@ -3379,8 +3401,9 @@ internal sealed class ControllerActionEndpointDataSourceFactory
 flowchart LR
     A["RouteEndpoint.RequestDelegate"] --> B["ControllerRequestDelegateFactory 生成的委托"]
     B --> C["ControllerContext"]
-    C --> D["IActionInvokerFactory.CreateInvoker"]
-    D --> E["IActionInvoker.InvokeAsync"]
+    C --> D["ControllerActionInvokerCache.GetCachedResult"]
+    D --> E["new ControllerActionInvoker"]
+    E --> F["InvokeAsync：进入 MVC 管线"]
 ```
 
 ### 补充机制图
@@ -3389,18 +3412,28 @@ flowchart LR
 sequenceDiagram
     participant R as Routing
     participant D as RequestDelegate
-    participant F as IActionInvokerFactory
-    participant I as IActionInvoker
+    participant F as ControllerActionInvokerCache
+    participant I as ControllerActionInvoker
     R->>D: HttpContext
     D->>D: 创建 RouteData 与 ControllerContext
-    D->>F: CreateInvoker(context)
-    F-->>D: invoker
+    D->>F: GetCachedResult(controllerContext)
+    F-->>D: cacheEntry, filters
+    D->>I: new ControllerActionInvoker(...)
     D->>I: InvokeAsync()
 ```
 
 ### 机制拆解
 
-`ControllerRequestDelegateFactory` 刻意不直接调用控制器方法。它只建立请求级上下文并交给 InvokerFactory，这样过滤器、模型绑定、结果执行和诊断都能走同一条 MVC 管线。
+上面两张图对应本章所附的直接创建路径：`ControllerRequestDelegateFactory` 生成请求委托，委托在每次请求中创建 `ControllerContext`，读取执行缓存和过滤器，然后直接 `new ControllerActionInvoker(...)` 并调用 `InvokeAsync()`。这条路径没有调用 `IActionInvokerFactory.CreateInvoker`，也不是缓存并复用整个 Invoker 实例。
+
+### 直接创建与通用回退不是同一条路径
+
+| 路径 | 选择条件 | 请求期执行入口 |
+| --- | --- | --- |
+| 本章的控制器直接创建路径 | `EnableActionInvokers` 为 false，且描述符是 `ControllerActionDescriptor` | `ControllerContext` → 执行缓存与过滤器 → `new ControllerActionInvoker` → `InvokeAsync` |
+| 通用回退路径 | 当前工厂返回 null 后继续尝试其他 `IRequestDelegateFactory`；全部返回 null 才使用 `ActionEndpointFactory._requestDelegate` | `ActionContext` → `IActionInvokerFactory.CreateInvoker` → `IActionInvoker.InvokeAsync` |
+
+本章源码中的提前返回条件是 `_enableActionInvokers || actionDescriptor is not ControllerActionDescriptor`。通用委托的无参 `CreateRequestDelegate()` 方法在原笔记中未展开；回退路径补充依据为 [ASP.NET Core v8.0.0 的 ActionEndpointFactory.cs](https://github.com/dotnet/aspnetcore/blob/v8.0.0/src/Mvc/Mvc.Core/src/Routing/ActionEndpointFactory.cs)。两条路径都通过 Invoker 进入 MVC 管线，但创建执行器的方式不同。
 
 ### 核心源码解读
 
@@ -3568,12 +3601,12 @@ internal interface IRequestDelegateFactory
 ```
 
 **源码解读：**
-- CreateRequestDelegate 接收 ActionDescriptor 与 RoutePattern。
-- 返回 null 时可回退到通用执行路径。
+- `CreateRequestDelegate` 接收 `ActionDescriptor` 与可选的 `RouteValueDictionary? dataTokens`，不是 `RoutePattern`。
+- 返回 null 表示当前工厂不提供委托，调用者继续尝试其他工厂；全部未提供时才使用通用执行路径。
 
 **读完要记住：**
 - 该工厂连接路由与 MVC。
-- RoutePattern 参与委托构建决策。
+- `dataTokens` 用于携带额外路由数据；实际请求路由值来自 `HttpContext.Request.RouteValues`。
 
 ### ControllerRequestDelegateFactory
 
@@ -3689,12 +3722,12 @@ internal sealed class ControllerRequestDelegateFactory : IRequestDelegateFactory
 ```
 
 **源码解读：**
-- 每次请求创建 ControllerContext 并由 InvokerFactory 获取 IActionInvoker。
+- 每次请求创建 `ControllerContext`，从 `ControllerActionInvokerCache` 取得 `cacheEntry` 和 `filters`，再直接创建 `ControllerActionInvoker`。
 - 委托调用 InvokeAsync 进入 MVC 过滤器管线。
 
 **读完要记住：**
 - Endpoint 不直接反射调用方法。
-- InvokerFactory 是请求执行入口。
+- 此处的请求执行入口是新建的 `ControllerActionInvoker.InvokeAsync()`；不要与通用回退路径的 `IActionInvokerFactory` 混淆。
 
 ### IActionInvoker
 
@@ -3729,6 +3762,8 @@ public interface IActionInvoker
 
 - ActionContext 是描述符进入请求期的载体。
 - IActionInvoker 是 Endpoint 与 MVC 执行状态机之间的最小协议。
+
+<a id="review-chapter-12"></a>
 
 ## 12. ResourceInvoker：MVC 外层过滤器状态机
 
@@ -5274,6 +5309,8 @@ internal abstract partial class ResourceInvoker
 - ResourceInvoker 负责 Action 外围的通用 MVC 管线。
 - State 表示步骤，Scope 表示过滤器回程边界。
 
+<a id="review-chapter-13"></a>
+
 ## 13. ControllerActionInvoker：控制器与 Action 内层管线
 
 ### 本组解决什么问题
@@ -5776,6 +5813,8 @@ internal partial class ControllerActionInvoker : ResourceInvoker, IActionInvoker
 - 模型绑定发生在 Action 过滤器进入之前。
 - Action 过滤器包裹方法调用，但不包裹授权和资源过滤器。
 
+<a id="review-chapter-14"></a>
+
 ## 14. ProblemDetails：错误结果标准化
 
 ### 本组解决什么问题
@@ -6026,6 +6065,8 @@ internal sealed class DefaultProblemDetailsFactory : ProblemDetailsFactory
 - ProblemDetailsFactory 负责数据，ObjectResult 负责响应执行。
 - 自定义委托最后执行，可以覆盖默认值。
 
+<a id="review-chapter-15"></a>
+
 ## 15. 过滤器元数据与工厂：排序、创建和复用
 
 ### 本组解决什么问题
@@ -6210,6 +6251,8 @@ public class TypeFilterAttribute : Attribute, IFilterFactory, IOrderedFilter
 
 - Order 决定包裹顺序，不决定过滤器阶段。
 - IsReusable 是生命周期承诺，不能随意设为 true。
+
+<a id="review-chapter-16"></a>
 
 ## 16. API 行为过滤器：自动 400 与客户端错误转换
 
@@ -6503,8 +6546,8 @@ sequenceDiagram
 
 ## 建议复习顺序
 
-1. 先只看第 1 至 4 章，建立“类型发现到描述符”的启动期主线。
-2. 再看第 7 至 11 章，理解描述符快照怎样转换成 Endpoint 并进入 Invoker。
-3. 单独精读第 12、13 章的两个状态机，先画进入顺序，再画退出顺序。
-4. 最后看第 14 至 16 章，把 ApiController 的自动 400 和 ProblemDetails 放回过滤器阶段。
+1. 先看[第 1 章：应用组成部分](#review-chapter-1)、[第 2 章：控制器发现](#review-chapter-2)与[第 3 章：Part 工厂](#review-chapter-3)，再结合[第 4 章：Action 描述符](#review-chapter-4)、[第 5 章：应用模型树](#review-chapter-5)和[第 6 章：模型提供器与约定](#review-chapter-6)，建立类型发现到描述符的启动期主线。
+2. 再看[第 7 章：描述符快照](#review-chapter-7)、[第 8 章：EndpointDataSource](#review-chapter-8)、[第 9 章：ActionEndpointFactory](#review-chapter-9)、[第 10 章：Map 注册](#review-chapter-10)和[第 11 章：请求执行入口](#review-chapter-11)，理解快照怎样转换成 Endpoint 并进入 Invoker。
+3. 单独精读[第 12 章：ResourceInvoker](#review-chapter-12)与[第 13 章：ControllerActionInvoker](#review-chapter-13)的两个状态机，先画进入顺序，再画退出顺序。
+4. 最后看[第 14 章：ProblemDetails](#review-chapter-14)、[第 15 章：过滤器元数据与工厂](#review-chapter-15)与[第 16 章：API 行为过滤器](#review-chapter-16)，把 ApiController 的自动 400 和 ProblemDetails 放回过滤器阶段。
 5. 调试时按 `Endpoint.Metadata -> ActionDescriptor -> ControllerContext -> Invoker` 的顺序观察对象，通常比直接进入控制器方法更容易定位问题。

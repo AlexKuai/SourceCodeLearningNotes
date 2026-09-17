@@ -59,6 +59,8 @@ flowchart LR
 | `BootstrapHostBuilder` | 8. Bootstrap | 默认回调收集与重放适配器 |
 | `ConfigureHostBuilder` | 9. Host 适配器 | 受限 IHostBuilder 兼容层 |
 | `ConfigureWebHostBuilder` | 10. WebHost 适配器 | 受限 IWebHostBuilder 兼容层 |
+<a id="review-chapter-1"></a>
+
 ## 1. WebApplication：Host、管道与路由的统一门面
 
 ### 本组解决什么问题
@@ -545,6 +547,8 @@ public sealed class HostApplicationBuilderSettings
 - Configuration 可由调用方提前提供。
 - DisableDefaults 控制默认配置源和服务是否注册。
 
+<a id="review-chapter-4"></a>
+
 ## 4. HostApplicationBuilder：边配置边可读的共享状态
 
 与旧 IHostBuilder 只收集回调不同，IHostApplicationBuilder 直接暴露 Configuration、Environment、Services、Logging 和 Metrics。新增配置源后 ConfigurationManager 立即建立 Provider 并可读取。
@@ -863,6 +867,8 @@ public sealed class HostApplicationBuilder : IHostApplicationBuilder
 - ConfigurationManager 添加配置源后立即可读取。
 - Build 只能调用一次。
 
+<a id="review-chapter-5"></a>
+
 ## 5. HostApplicationBuilder Build：容器工厂、冻结与 IHost
 
 Build 应用兼容适配器的延迟变更，调用当前 ServiceProvider 工厂创建根容器，把 ServiceCollection 设为只读，最后从容器解析 Internal Host。
@@ -927,6 +933,8 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(options);
 - 环境基础属性在 Builder 初始化前确定。
 - ConfigurationManager 支持添加配置后立即读取。
 - HostApplicationBuilder.Build 创建根容器后会冻结 ServiceCollection。
+
+<a id="review-chapter-6"></a>
 
 ## 6. WebApplicationBuilder：Generic Host 与 Web 默认值组装
 
@@ -1281,6 +1289,8 @@ public sealed class WebApplicationBuilder : IHostApplicationBuilder
 - ConfigureApplication 自动连接全局 EndpointRouteBuilder、路由、认证、授权和 Endpoint 执行。
 - 用户通过 Services、Configuration、Logging、Host 和 WebHost 修改同一构建状态。
 
+<a id="review-chapter-7"></a>
+
 ## 7. 自动管道：ConfigureApplication 如何连接用户管道
 
 ConfigureApplication 在 GenericWebHostService 启动时执行。它检查 WebApplication 已登记的数据源和服务，补齐开发者异常页、路由、认证、授权、用户中间件链及 Endpoint 执行。
@@ -1545,6 +1555,8 @@ await app.RunAsync();
 - GenericWebHostService 注册在 Bootstrap 后暂存，Build 时恢复。
 - 检测到相关服务和 Endpoint 后，框架会补齐默认路由、认证、授权和执行中间件。
 
+<a id="review-chapter-9"></a>
+
 ## 9. ConfigureHostBuilder：旧 Host API 的受限兼容层
 
 ### 本组解决什么问题
@@ -1778,6 +1790,8 @@ public sealed class ConfigureHostBuilder : IHostBuilder, ISupportsConfigureWebHo
 **读完要记住：**
 - 环境、应用名和 ContentRoot 等已初始化属性禁止改变。
 - 再次 ConfigureWebHost 也不受支持。
+
+<a id="review-chapter-10"></a>
 
 ## 10. ConfigureWebHostBuilder：Web 设置兼容与 Startup 禁区
 
@@ -2034,11 +2048,11 @@ WebApplication app = builder.Build();
 
 ## 复习顺序建议
 
-1. 先读 `WebApplication`，明确它同时代理 Host、管道和 Endpoint 注册。
-2. 再读 `HostApplicationBuilder`，理解 ConfigurationManager 与服务集合为何立即可用。
-3. 接着读 `WebApplicationBuilder` 构造和 Build，梳理 Bootstrap 与 GenericWebHostService。
-4. 然后读 ConfigureApplication，理解 Minimal API 自动插入中间件的条件。
-5. 最后对比 ConfigureHostBuilder 与 ConfigureWebHostBuilder 的支持范围和限制。
+1. 先读[第 1 章：WebApplication](#review-chapter-1)，明确它同时代理 Host、管道和 Endpoint 注册。
+2. 再读[第 4 章：HostApplicationBuilder](#review-chapter-4)，理解 ConfigurationManager 与服务集合为何立即可用。
+3. 接着读[第 5 章：HostApplicationBuilder Build](#review-chapter-5)与[第 6 章：WebApplicationBuilder](#review-chapter-6)，梳理容器构建、Bootstrap 与 GenericWebHostService。
+4. 然后读[第 7 章：自动管道](#review-chapter-7)，理解 ConfigureApplication 自动插入中间件的条件。
+5. 最后对比[第 9 章：ConfigureHostBuilder](#review-chapter-9)与[第 10 章：ConfigureWebHostBuilder](#review-chapter-10)的支持范围和限制。
 
 ## 容易混淆的点
 
